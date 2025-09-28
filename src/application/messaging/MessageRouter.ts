@@ -96,6 +96,20 @@ class FlowMessageHandler extends BaseMessageHandler {
       return true;
     }
 
+    const hasSession = await context.flowEngine.isActive(context.chatId);
+    if (!hasSession) {
+      const restarted = await context.flowSessionService.ensureInitialMenu({
+        chatId: context.chatId,
+        flowEngine: context.flowEngine,
+        sendSafe: context.sendSafe,
+        resetDelay: context.resetDelay,
+        flowUnavailableText: context.flowUnavailableText,
+      });
+      if (restarted) {
+        return true;
+      }
+    }
+
     return this.handleNext(context);
   }
 }

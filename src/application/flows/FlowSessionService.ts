@@ -169,6 +169,59 @@ function createReentryState(context: FlowReentryContext): FlowReentryState {
   return new FlowReentryRestartState(context);
 }
 
+interface FlowAdvanceState {
+  handle(): Promise<boolean>;
+}
+
+class FlowAdvanceActiveState implements FlowAdvanceState {
+  constructor(private readonly advance: () => Promise<boolean>) {}
+
+  async handle(): Promise<boolean> {
+    return this.advance();
+  }
+}
+
+class FlowAdvanceInactiveState implements FlowAdvanceState {
+  constructor(
+    private readonly startInitial: () => Promise<boolean>,
+    private readonly resumePrevious: () => Promise<boolean>,
+    private readonly handleUnavailable: () => Promise<boolean>,
+  ) {}
+
+  async handle(): Promise<boolean> {
+    const started = await this.startInitial();
+    if (started) {
+      return true;
+    }
+
+    const resumed = await this.resumePrevious();
+    if (resumed) {
+      return true;
+    }
+
+    return this.handleUnavailable();
+  }
+}
+
+function createAdvanceState(
+  isActive: boolean,
+  operations: {
+    readonly advanceActive: () => Promise<boolean>;
+    readonly startInitial: () => Promise<boolean>;
+    readonly resumePrevious: () => Promise<boolean>;
+    readonly handleUnavailable: () => Promise<boolean>;
+  },
+): FlowAdvanceState {
+  if (isActive) {
+    return new FlowAdvanceActiveState(operations.advanceActive);
+  }
+  return new FlowAdvanceInactiveState(
+    operations.startInitial,
+    operations.resumePrevious,
+    operations.handleUnavailable,
+  );
+}
+
 export class FlowSessionService {
   private readonly tracker = createFlowPromptTracker({ windowMs: this.options.promptWindowMs });
   private readonly flows: Readonly<Record<FlowKey, FlowDefinition>>;
@@ -285,6 +338,31 @@ export class FlowSessionService {
     }
     await this.sendPrompt(chatId, start.node as FlowNode, 'menu', sendSafe);
     return true;
+  }
+
+  private async startInitialSessionForChat(
+    chatId: string,
+    engine: FlowRuntimeEngine,
+    sendSafe: FlowSafeSender,
+    resetDelay?: (chatId: string) => void,
+  ): Promise<boolean> {
+    const started = await this.startInitialFlow(chatId, engine, sendSafe);
+    if (!started) {
+      return false;
+    }
+    await this.options.conversationRecovery.recordValidSelection(chatId);
+    resetDelay?.(chatId);
+    return true;
+  }
+
+  private async handleUnavailableFlow(context: FlowAdvanceContext): Promise<boolean> {
+    await context.sendSafe(context.chatId, context.texts.flowUnavailableText);
+    return true;
+  }
+
+  private async advanceActiveSession(context: FlowAdvanceContext): Promise<boolean> {
+    const result = await context.flowEngine.advance(context.chatId, context.input);
+    return this.processAdvanceResult(context, result);
   }
 
   private async handleSuggestionConfirmation(
@@ -537,22 +615,38 @@ export class FlowSessionService {
     }
 
     const active = await context.flowEngine.isActive(context.chatId);
-    if (!active) {
-      const resumed = await this.resumeIfPossible(context);
-      if (resumed) {
-        return true;
-      }
-      const started = await this.startInitialFlow(context.chatId, context.flowEngine, context.sendSafe);
-      if (!started) {
-        await context.sendSafe(context.chatId, context.texts.flowUnavailableText);
-        return true;
-      }
-      await this.options.conversationRecovery.recordValidSelection(context.chatId);
-      context.resetDelay?.(context.chatId);
+    const state = createAdvanceState(active, {
+      advanceActive: () => this.advanceActiveSession(context),
+      startInitial: () =>
+        this.startInitialSessionForChat(
+          context.chatId,
+          context.flowEngine,
+          context.sendSafe,
+          context.resetDelay,
+        ),
+      resumePrevious: () => this.resumeIfPossible(context),
+      handleUnavailable: () => this.handleUnavailableFlow(context),
+    });
+    return state.handle();
+  }
+
+  async ensureInitialMenu(options: {
+    readonly chatId: string;
+    readonly flowEngine: FlowRuntimeEngine;
+    readonly sendSafe: FlowSafeSender;
+    readonly resetDelay?: (chatId: string) => void;
+    readonly flowUnavailableText: string;
+  }): Promise<boolean> {
+    const started = await this.startInitialSessionForChat(
+      options.chatId,
+      options.flowEngine,
+      options.sendSafe,
+      options.resetDelay,
+    );
+    if (started) {
       return true;
     }
-
-    const result = await context.flowEngine.advance(context.chatId, context.input);
-    return this.processAdvanceResult(context, result);
+    await options.sendSafe(options.chatId, options.flowUnavailableText);
+    return true;
   }
 }
