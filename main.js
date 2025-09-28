@@ -9,13 +9,19 @@ const flows = require('./src/flows');
  * @returns {T}
  */
 function resolveFlow(entry) {
+    console.log('[boot] resolveFlow: recebida entrada', entry && typeof entry === 'object' ? Object.keys(entry) : typeof entry);
     if (entry && typeof entry === 'object' && 'flow' in entry && entry.flow) {
-        return /** @type {T} */ (entry.flow);
+        const resolved = /** @type {T} */ (entry.flow);
+        try { console.log('[boot] resolveFlow: usando entry.flow'); } catch {}
+        return resolved;
     }
+    try { console.log('[boot] resolveFlow: usando entry direto'); } catch {}
     return /** @type {T} */ (entry);
 }
 const CatalogFlow = resolveFlow(flows.catalog);
+try { console.log('[boot] CatalogFlow resolvido: start=', CatalogFlow && CatalogFlow.start); } catch {}
 const MenuFlow = resolveFlow(flows.menu);
+try { console.log('[boot] MenuFlow resolvido: start=', MenuFlow && MenuFlow.start); } catch {}
 const { createApp } = require('./src/app/appFactory');
 const { createCommandRegistry } = require('./src/app/commandRegistry');
 const {
@@ -43,6 +49,7 @@ const AUTH_DIR = path.resolve(
     process.cwd(),
     process.env.WWEBJS_AUTH_DIR || '.wwebjs_auth'
 );
+try { console.log('[boot] AUTH_DIR definido para', AUTH_DIR); } catch {}
 
 /**
  * @param {number} ms
@@ -86,8 +93,10 @@ async function removeAuthDirWithRetry(
  * @returns {Promise<void>}
  */
 async function safeReauth(cli) {
+    console.log('[reauth] iniciando safeReauth');
     try {
         await cli.destroy();
+        console.log('[reauth] cliente destruído');
     } catch (e) {
         console.warn('[reauth] erro ao destruir cliente:', e?.message || e);
     }
@@ -106,11 +115,13 @@ async function safeReauth(cli) {
 const app = createApp({
     authDir: AUTH_DIR,
     buildHandlers: ({ client, rate, flowEngine }) => {
+        console.log('[boot] buildHandlers: inicializando handlers do app');
         // Estado por app
         let reconnectAttempts = 0;
         const FLOW_PROMPT_WINDOW_MS = Number(
             process.env.FLOW_PROMPT_WINDOW_MS || DEFAULT_FLOW_PROMPT_WINDOW_MS,
         );
+        try { console.log('[boot] FLOW_PROMPT_WINDOW_MS =', FLOW_PROMPT_WINDOW_MS); } catch {}
         const flowPromptTracker = createFlowPromptTracker({ windowMs: FLOW_PROMPT_WINDOW_MS });
 
         /**
@@ -188,6 +199,7 @@ const app = createApp({
              * @returns {Promise<void>}
              */
             async function gracefulShutdown({ exit = true } = {}) {
+                console.log('[boot] gracefulShutdown: iniciando (exit =', exit, ')');
                 try { rate.stop(); } catch {}
                 try { await client.destroy(); } catch (e) { console.warn('[shutdown] destroy:', e?.message || e); }
                 if (exit && process.env.NODE_ENV !== 'test') process.exit(0);
@@ -197,6 +209,7 @@ const app = createApp({
              * @returns {Promise<void>}
              */
             async function gracefulRestart() {
+                console.log('[boot] gracefulRestart: iniciando');
                 try { rate.stop(); } catch {}
                 try { await client.destroy(); } catch {}
                 rate.start();
@@ -228,6 +241,7 @@ const app = createApp({
                 restartNotice,
                 shouldExitOnShutdown: SHOULD_EXIT_ON_SHUTDOWN,
             });
+            console.log('[boot] commandRegistry: pronto');
 
             /**
              * @param {WWebMessage} message
@@ -305,15 +319,18 @@ const app = createApp({
             const BASE = Number(process.env.RECONNECT_BASE_BACKOFF_MS || 1000);
             const FACTOR = Number(process.env.RECONNECT_BACKOFF_FACTOR || 2);
             const backoffMs = Math.min(MAX, BASE * Math.pow(FACTOR, reconnectAttempts++));
+            console.log('[boot] onDisconnected: reagendando initialize em', backoffMs, 'ms');
             setTimeout(() => { client.initialize().catch(e => console.error('[reconnect] initialize falhou:', e?.message || e)); }, backoffMs);
         };
 
         return { handleIncoming, onDisconnected };
     }
 });
+try { console.log('[boot] app criado com authDir =', AUTH_DIR); } catch {}
 
 // Inicializa apenas quando executado como script principal (não em testes)
 if (require.main === module) {
+    console.log('[boot] main: iniciando app.start()');
     app.start().catch(e => {
         console.error('Falha ao iniciar:', e?.message || e);
         process.exitCode = 1;
@@ -321,5 +338,6 @@ if (require.main === module) {
 }
 
 // Exporte app e atalhos para compatibilidade com testes existentes
+console.log('[boot] module.exports preparado');
 module.exports = { app, client: app.client, rate: app.rate };
 

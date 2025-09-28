@@ -72,7 +72,14 @@ function createPuppeteerOptions() {
   if (typeof executablePath === 'string' && executablePath.trim()) {
     options.executablePath = executablePath;
   }
-
+  try {
+    console.log('[factory] puppeteer options:', {
+      headless: options.headless,
+      argsCount: Array.isArray(options.args) ? options.args.length : 0,
+      singleProcess: process.env.PUPPETEER_SINGLE_PROCESS === '1',
+      chromePath: options.executablePath ? '[set]' : '[default]'
+    });
+  } catch {}
   return options;
 }
 
@@ -81,10 +88,14 @@ function createPuppeteerOptions() {
  * @returns {import('whatsapp-web.js').Client}
  */
 function defaultClientFactory(authDir) {
-  return new Client({
+  const opts = {
     authStrategy: new LocalAuth({ dataPath: authDir }),
-    puppeteer: createPuppeteerOptions(),
-  });
+    puppeteer: createPuppeteerOptions()
+  };
+  try {
+    console.log('[factory] criando Client com LocalAuth em', authDir);
+  } catch {}
+  return new Client(opts);
 }
 
 /**
@@ -93,12 +104,53 @@ function defaultClientFactory(authDir) {
  * @returns {void}
  */
 function registerHandlers(client, { handleIncoming, onQR, onReady, onAuthFail, onDisconnected } = {}) {
+  try {
+    console.log('[factory] registrando handlers:', {
+      onQR: Boolean(onQR),
+      onReady: Boolean(onReady),
+      onAuthFail: Boolean(onAuthFail),
+      onDisconnected: Boolean(onDisconnected),
+      handleIncoming: Boolean(handleIncoming),
+    });
+  } catch {}
   if (onQR) client.on('qr', onQR);
   if (onReady) client.on('ready', onReady);
   if (onAuthFail) client.on('auth_failure', onAuthFail);
   if (onDisconnected) client.on('disconnected', onDisconnected);
+  // Eventos úteis de diagnóstico de conexão/estado
+  client.on('authenticated', () => console.log('[client] authenticated'));
+  client.on('loading_screen', (p, ms) => console.log('[client] loading_screen:', p, ms));
+  client.on('change_state', (s) => console.log('[client] state:', s));
+
   if (handleIncoming) {
-    client.on('message_create', handleIncoming);
+    // Evento recomendado para mensagens recebidas
+    client.on('message', async (msg) => {
+      try {
+        console.log('[evt:message]', {
+          from: msg?.from,
+          to: msg?.to,
+          fromMe: !!msg?.fromMe,
+          type: msg?.type,
+          hasBody: !!msg?.body,
+          bodyPreview: (msg?.body || '').slice(0, 60),
+        });
+      } catch {}
+      try { await handleIncoming(msg); } catch (e) { console.warn('[handleIncoming] erro:', e?.message || e); }
+    });
+
+    // Mantém message_create para depuração
+    client.on('message_create', (msg) => {
+      try {
+        console.log('[evt:message_create]', {
+          from: msg?.from,
+          to: msg?.to,
+          fromMe: !!msg?.fromMe,
+          type: msg?.type,
+          hasBody: !!msg?.body,
+          bodyPreview: (msg?.body || '').slice(0, 60),
+        });
+      } catch {}
+    });
   }
 }
 
@@ -117,21 +169,38 @@ function createApp({
   }),
   buildHandlers, // (ctx) => { handleIncoming, onQR, onReady, onAuthFail, onDisconnected }
 } = {}) {
+  try { console.log('[factory] createApp: authDir =', authDir); } catch {}
   const client = clientFactory(authDir);
+  try { console.log('[factory] RateController.start()'); } catch {}
   rate.start();
 
   /** @type {HandlerFactoryContext} */
   const ctx = { client, rate, flowEngine };
   /** @type {ClientEventHandlers} */
   const handlers = typeof buildHandlers === 'function' ? (buildHandlers(ctx) || {}) : {};
+  try {
+    console.log('[factory] handlers criados:', {
+      handleIncoming: Boolean(handlers.handleIncoming),
+      onQR: Boolean(handlers.onQR),
+      onReady: Boolean(handlers.onReady),
+      onAuthFail: Boolean(handlers.onAuthFail),
+      onDisconnected: Boolean(handlers.onDisconnected),
+    });
+  } catch {}
 
   registerHandlers(client, {
     handleIncoming: handlers.handleIncoming,
     onQR: handlers.onQR || (async (qr) => {
+      try {
+        console.log('[qr] evento recebido');
+      } catch {}
       const termEnabled = process.env.QR_TERMINAL_ENABLED !== '0';
       const small = process.env.QR_TERMINAL_SMALL !== '0';
       const savePath = (process.env.QR_SAVE_PATH || '').trim();
       const imagePath = (process.env.QR_IMAGE_PATH || '').trim();
+      try {
+        console.log('[qr] config:', { termEnabled, small, savePath: Boolean(savePath), imagePath: Boolean(imagePath) });
+      } catch {}
 
       // Mensagem de ajuda
       const showHints = process.env.QR_SHOW_HINTS !== '0';
@@ -210,8 +279,16 @@ function createApp({
    * @returns {Promise<HandlerFactoryContext>}
    */
   async function start() {
+    try { console.log('[factory] start(): NODE_ENV =', process.env.NODE_ENV); } catch {}
     if (process.env.NODE_ENV !== 'test') {
-      await client.initialize();
+      try {
+        console.log('[factory] client.initialize()');
+        await client.initialize();
+        console.log('[factory] client.initialize() OK');
+      } catch (e) {
+        console.error('[factory] client.initialize() falhou:', e?.message || e);
+        throw e;
+      }
     }
     return ctx;
   }
@@ -220,7 +297,9 @@ function createApp({
    * @returns {Promise<void>}
    */
   async function stop() {
+    try { console.log('[factory] stop(): RateController.stop()'); } catch {}
     try { rate.stop(); } catch {}
+    try { console.log('[factory] stop(): client.destroy()'); } catch {}
     try { await client.destroy(); } catch {}
   }
 
