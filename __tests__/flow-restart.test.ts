@@ -24,14 +24,18 @@ const catalogFlow: FlowDefinition = {
   nodes: {
     'catalog:start': {
       id: 'catalog:start',
+      kind: 'text',
       prompt: 'Escolha uma categoria',
+      promptContent: 'Escolha uma categoria',
       options: [
         { id: 'produtos', text: 'Produtos', aliases: ['1'], next: 'catalog:produtos' },
       ],
     },
     'catalog:produtos': {
       id: 'catalog:produtos',
+      kind: 'text',
       prompt: 'Lista de produtos',
+      promptContent: 'Lista de produtos',
       terminal: true,
     },
   },
