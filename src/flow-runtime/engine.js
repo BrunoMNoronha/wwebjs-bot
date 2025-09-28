@@ -114,7 +114,8 @@ class FlowEngine {
       return { ok: false, error: 'no_node', nodeId: current };
     }
 
-    if (!Array.isArray(node.options) || node.options.length === 0) {
+    const hasOptions = Array.isArray(node.options) && node.options.length > 0;
+    if (!hasOptions) {
       await this.store.clear(chatId);
       return { ok: true, terminal: true, prompt: node.prompt };
     }

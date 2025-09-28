@@ -112,4 +112,25 @@ describe('FlowEngine - missing node recovery', () => {
     expect(await store.has(chatId)).toBe(false);
     expect(store.clearCalls).toBe(1);
   });
+
+  it('encerra o fluxo para nós válidos sem opções', async () => {
+    const chatId = 'chat-456';
+    /** @type {FlowDefinition} */
+    const terminalFlow = {
+      start: 'start',
+      nodes: {
+        start: {
+          prompt: 'Fim',
+        },
+      },
+    };
+
+    await store.set(chatId, { flow: terminalFlow, current: 'start' });
+
+    const result = await engine.advance(chatId, 'irrelevante');
+
+    expect(result).toEqual({ ok: true, terminal: true, prompt: 'Fim' });
+    expect(await store.has(chatId)).toBe(false);
+    expect(store.clearCalls).toBe(1);
+  });
 });
