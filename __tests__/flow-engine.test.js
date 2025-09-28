@@ -129,7 +129,7 @@ describe('FlowEngine - missing node recovery', () => {
 
     const result = await engine.advance(chatId, 'irrelevante');
 
-    expect(result).toEqual({ ok: true, terminal: true, prompt: 'Fim' });
+    expect(result).toEqual({ ok: true, terminal: true, prompt: 'Fim', nodeId: 'start' });
     expect(await store.has(chatId)).toBe(false);
     expect(store.clearCalls).toBe(1);
   });

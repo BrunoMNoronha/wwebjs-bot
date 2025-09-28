@@ -1,21 +1,28 @@
+import { List, type MessageContent } from 'whatsapp-web.js';
 import { createFlowPromptTracker } from '../../app/flowPromptTracker';
+import type { MenuTemplate, FlowTextConfig } from '../../config/messages';
+import {
+  findBestSuggestion,
+  normalizeOption,
+  type NormalizedFlowOption,
+} from '../../validation/answers';
+import type {
+  AdvanceResult,
+  FlowDefinition as RuntimeFlowDefinition,
+  FlowNode as RuntimeFlowNode,
+  FlowOption as RuntimeFlowOption,
+  FlowEngine as FlowRuntimeEngine,
+} from '../../flow-runtime/engine';
+import { ConversationRecoveryService, type AttemptStatus } from '../messaging/ConversationRecoveryService';
 
-export interface FlowOption {
-  readonly text: string;
-  readonly next?: string;
-  readonly aliases?: readonly string[];
-  readonly correct?: boolean;
+export interface FlowOption extends RuntimeFlowOption {}
+
+export interface FlowNode extends RuntimeFlowNode {
+  readonly template?: MenuTemplate;
+  readonly lockOnComplete?: boolean;
 }
 
-export interface FlowNode {
-  readonly id?: string;
-  readonly prompt?: string;
-  readonly terminal?: boolean;
-  readonly options?: readonly FlowOption[];
-}
-
-export interface FlowDefinition {
-  readonly start: string;
+export interface FlowDefinition extends RuntimeFlowDefinition {
   readonly nodes: Record<string, FlowNode>;
 }
 
@@ -34,22 +41,16 @@ export interface FlowSessionServiceOptions {
   readonly overrides?: Partial<Record<FlowKey, FlowDefinition>>;
   readonly menuFlowEnabled: boolean;
   readonly promptWindowMs: number;
+  readonly conversationRecovery: ConversationRecoveryService;
+  readonly textConfig: FlowTextConfig;
+  readonly initialMenuTemplate: MenuTemplate;
+  readonly fallbackMenuTemplate: MenuTemplate;
+  readonly lockDurationMs: number;
+  readonly fuzzySuggestionThreshold: number;
+  readonly fuzzyConfirmationThreshold: number;
 }
 
-export interface FlowRuntimeEngine {
-  start(chatId: string, flow: FlowDefinition): Promise<{ ok: boolean; node?: FlowNode }>;
-  advance(
-    chatId: string,
-    inputRaw: string,
-  ): Promise<
-    | { ok: false; error: string; expected?: string[]; nodeId?: string }
-    | { ok: true; terminal: boolean; prompt?: string; options?: string[] }
-  >;
-  cancel(chatId: string): Promise<void>;
-  isActive(chatId: string): Promise<boolean>;
-}
-
-export type FlowSafeSender = (chatId: string, content: string) => Promise<unknown>;
+export type FlowSafeSender = (chatId: string, content: MessageContent) => Promise<unknown>;
 
 export interface FlowResumeTexts {
   readonly expiredFlowText: string;
@@ -67,6 +68,7 @@ export interface FlowResumeContext {
   readonly flowEngine: FlowRuntimeEngine;
   readonly sendSafe: FlowSafeSender;
   readonly texts: FlowResumeTexts;
+  readonly resetDelay?: (chatId: string) => void;
 }
 
 export interface FlowAdvanceContext extends FlowResumeContext {
@@ -85,7 +87,11 @@ class StaticFlowRestartStrategy implements FlowRestartStrategy {
   ) {}
 
   async start(chatId: string, flowEngine: FlowRuntimeEngine): Promise<{ ok: boolean; node?: FlowNode }> {
-    return flowEngine.start(chatId, this.definition);
+    const result = await flowEngine.start(chatId, this.definition);
+    if (result.ok && result.node) {
+      return { ok: true, node: result.node as FlowNode };
+    }
+    return result as { ok: boolean; node?: FlowNode };
   }
 }
 
@@ -101,16 +107,14 @@ class ConditionalFlowRestartStrategy implements FlowRestartStrategy {
     if (!this.isEnabled()) {
       return this.fallback.start(chatId, flowEngine);
     }
-    return flowEngine.start(chatId, this.definition);
+    const result = await flowEngine.start(chatId, this.definition);
+    if (result.ok && result.node) {
+      return { ok: true, node: result.node as FlowNode };
+    }
+    return result as { ok: boolean; node?: FlowNode };
   }
 }
 
-/**
- * Implementa o *State Pattern* para retomar fluxos expirados sem espalhar
- * condicionais por toda a classe. Cada estado representa uma combinação de
- * pré-condições (prompt recente, input válido etc.) e decide se deve ou não
- * disparar um reinício.
- */
 interface FlowReentryState {
   handle(): Promise<boolean>;
 }
@@ -151,7 +155,7 @@ class FlowReentryRestartState implements FlowReentryState {
       await request.sendSafe(request.chatId, request.texts.flowUnavailableText);
       return true;
     }
-    await service.sendPrompt(request.chatId, result.node, strategy.key, request.sendSafe);
+    await service.sendPrompt(request.chatId, result.node as FlowNode, strategy.key, request.sendSafe);
     return true;
   }
 }
@@ -230,32 +234,24 @@ export class FlowSessionService {
     return undefined;
   }
 
-  formatPrompt(node: FlowNode | { prompt?: string; options?: readonly string[] } | undefined): string {
-    if (!node) {
-      return '';
-    }
-    const prompt = node.prompt ?? '';
-    const options = Array.isArray(node.options)
-      ? node.options.map((option, index) => {
-        if (typeof option === 'string') {
-          return option;
-        }
-        return `${index + 1}. ${option.text}`;
-      })
-      : [];
-    if (prompt && options.length > 0) {
-      return `${prompt}\n${options.join('\n')}`;
-    }
-    if (options.length > 0) {
-      return options.join('\n');
-    }
-    return prompt;
+  private async sendTemplate(chatId: string, template: MenuTemplate, sendSafe: FlowSafeSender): Promise<void> {
+    const sections = template.sections.map((section) => ({
+      title: section.title,
+      rows: section.rows.map((row) => ({ ...row })),
+    }));
+    const list = new List(template.body, template.buttonText, sections, template.title);
+    await sendSafe(chatId, list as MessageContent);
   }
 
   async sendPrompt(chatId: string, node: FlowNode | undefined, flowKey: FlowKey, sendSafe: FlowSafeSender): Promise<void> {
-    const text = this.formatPrompt(node);
-    if (text) {
-      await sendSafe(chatId, text);
+    if (!node) {
+      return;
+    }
+    if (node.prompt) {
+      await sendSafe(chatId, node.prompt);
+    }
+    if (node.template) {
+      await this.sendTemplate(chatId, node.template, sendSafe);
     }
     this.rememberPrompt(chatId, flowKey);
   }
@@ -267,27 +263,180 @@ export class FlowSessionService {
     return state.handle();
   }
 
-  async advanceOrRestart(context: FlowAdvanceContext): Promise<boolean> {
-    if (!context.chatId || !context.input) {
+  private async startInitialFlow(
+    chatId: string,
+    engine: FlowRuntimeEngine,
+    sendSafe: FlowSafeSender,
+  ): Promise<boolean> {
+    const menuFlow = this.getFlowDefinition('menu');
+    const start = await engine.start(chatId, menuFlow);
+    if (!start.ok || !start.node) {
+      return false;
+    }
+    await this.sendPrompt(chatId, start.node as FlowNode, 'menu', sendSafe);
+    return true;
+  }
+
+  private async handleSuggestionConfirmation(
+    context: FlowAdvanceContext,
+    normalizedInput: string,
+  ): Promise<boolean> {
+    const suggestion = await this.options.conversationRecovery.peekPendingSuggestion(context.chatId);
+    if (!suggestion) {
       return false;
     }
 
-    const active = await context.flowEngine.isActive(context.chatId);
-    if (!active) {
-      return this.resumeIfPossible(context);
+    const affirmative = ['sim', 's', 'isso', 'claro'];
+    const negative = ['nao', 'não', 'n', 'negativo'];
+    if (affirmative.includes(normalizedInput)) {
+      await this.options.conversationRecovery.consumePendingSuggestion(context.chatId);
+      return this.advanceWithInput(context, suggestion.optionId);
+    }
+    if (negative.includes(normalizedInput)) {
+      await this.options.conversationRecovery.consumePendingSuggestion(context.chatId);
+      const status = await this.options.conversationRecovery.recordInvalidAttempt(context.chatId);
+      return this.handleInvalidAttempt(context, status);
+    }
+    return false;
+  }
+
+  private matchFallbackInput(input: string): 'aguardar_atendente' | 'voltar_menu' | null {
+    const normalized = input.trim().toLowerCase();
+    if (!normalized) {
+      return null;
+    }
+    if (
+      normalized === '1'
+      || normalized.includes('aguardar')
+      || normalized === 'aguardar_atendente'
+    ) {
+      return 'aguardar_atendente';
+    }
+    if (normalized === '2' || normalized.includes('voltar') || normalized === 'voltar_menu') {
+      return 'voltar_menu';
+    }
+    return null;
+  }
+
+  private async handleFallbackResponse(context: FlowAdvanceContext, input: string): Promise<boolean> {
+    const status = await this.options.conversationRecovery.getAttempts(context.chatId);
+    if (status.phase !== 'fallback') {
+      return false;
+    }
+    const match = this.matchFallbackInput(input);
+    if (!match) {
+      const attempts = await this.options.conversationRecovery.recordInvalidAttempt(context.chatId);
+      return this.handleInvalidAttempt(context, attempts);
     }
 
-    const result = await context.flowEngine.advance(context.chatId, context.input);
+    if (match === 'voltar_menu') {
+      await this.options.conversationRecovery.recordValidSelection(context.chatId);
+      await context.sendSafe(context.chatId, this.options.textConfig.resumedNotice);
+      await this.sendInitialMenu(context.chatId, context.sendSafe);
+      context.resetDelay?.(context.chatId);
+      return true;
+    }
+
+    await this.finishWithLock(context, this.options.textConfig.fallbackClosure);
+    return true;
+  }
+
+  private async finishWithLock(context: FlowAdvanceContext, message: string): Promise<void> {
+    await context.sendSafe(context.chatId, message);
+    await this.options.conversationRecovery.lock(
+      context.chatId,
+      Date.now() + this.options.lockDurationMs,
+    );
+    await context.sendSafe(context.chatId, this.options.textConfig.lockedNotice);
+    this.clearPrompt(context.chatId);
+    context.resetDelay?.(context.chatId);
+  }
+
+  private async sendInitialMenu(chatId: string, sendSafe: FlowSafeSender): Promise<void> {
+    await sendSafe(chatId, `${this.options.textConfig.welcomeHeader}\n${this.options.textConfig.welcomeBody}`);
+    await this.sendTemplate(chatId, this.options.initialMenuTemplate, sendSafe);
+    this.rememberPrompt(chatId, 'menu');
+  }
+
+  private async sendFallbackMenu(chatId: string, sendSafe: FlowSafeSender): Promise<void> {
+    await this.sendTemplate(chatId, this.options.fallbackMenuTemplate, sendSafe);
+    this.rememberPrompt(chatId, 'menu');
+  }
+
+  private async trySuggest(
+    chatId: string,
+    input: string,
+    options: readonly NormalizedFlowOption[] | undefined,
+    sendSafe: FlowSafeSender,
+  ): Promise<boolean> {
+    if (!options) {
+      return false;
+    }
+    const suggestion = findBestSuggestion(input, options, {
+      minimumConfidence: this.options.fuzzySuggestionThreshold,
+    });
+    if (!suggestion) {
+      return false;
+    }
+    if (suggestion.confidence >= this.options.fuzzyConfirmationThreshold) {
+      await this.options.conversationRecovery.setPendingSuggestion(chatId, {
+        optionId: suggestion.option.id,
+        optionText: suggestion.option.text,
+        confidence: suggestion.confidence,
+      });
+      await sendSafe(chatId, this.options.textConfig.suggestion.suggestionPrompt(suggestion.option.text));
+      await sendSafe(chatId, this.options.textConfig.suggestion.confirmHint);
+      return true;
+    }
+    return false;
+  }
+
+  private async handleInvalidAttempt(
+    context: FlowAdvanceContext,
+    status: AttemptStatus,
+  ): Promise<boolean> {
+    if (status.attempts >= 3) {
+      await this.finishWithLock(context, this.options.textConfig.fallbackClosure);
+      return true;
+    }
+    if (status.phase === 'fallback') {
+      await context.sendSafe(context.chatId, this.options.textConfig.fallbackRetry);
+      await this.sendTemplate(context.chatId, this.options.fallbackMenuTemplate, context.sendSafe);
+      this.rememberPrompt(context.chatId, 'menu');
+      return true;
+    }
+    await context.sendSafe(context.chatId, this.options.textConfig.friendlyRetry);
+    await this.sendTemplate(context.chatId, this.options.initialMenuTemplate, context.sendSafe);
+    this.rememberPrompt(context.chatId, 'menu');
+    return true;
+  }
+
+  private async advanceWithInput(context: FlowAdvanceContext, input: string): Promise<boolean> {
+    const result = await context.flowEngine.advance(context.chatId, input);
+    return this.processAdvanceResult(context, result);
+  }
+
+  private async processAdvanceResult(context: FlowAdvanceContext, result: AdvanceResult): Promise<boolean> {
     if (!result.ok) {
       if (result.error === 'input_invalido') {
-        await context.sendSafe(context.chatId, context.texts.invalidOptionText);
-        return true;
+        const entry = this.getNodeEntry(result.nodeId);
+        if (!entry || entry.key !== 'menu') {
+          await context.sendSafe(context.chatId, context.texts.invalidOptionText);
+          return true;
+        }
+        const options = this.extractOptionsForNode(result.nodeId);
+        const suggested = await this.trySuggest(context.chatId, context.input, options, context.sendSafe);
+        if (suggested) {
+          return true;
+        }
+        const status = await this.options.conversationRecovery.recordInvalidAttempt(context.chatId);
+        return this.handleInvalidAttempt(context, status);
       }
       this.clearPrompt(context.chatId);
       try {
         await context.flowEngine.cancel(context.chatId);
       } catch (error) {
-        // Ignorado: cancelamento falho não deve impedir resposta amigável.
+        void error;
       }
       await context.sendSafe(context.chatId, context.texts.genericFlowErrorText);
       return true;
@@ -297,15 +446,93 @@ export class FlowSessionService {
       if (result.prompt) {
         await context.sendSafe(context.chatId, result.prompt);
       }
+      await this.options.conversationRecovery.recordValidSelection(context.chatId);
+      context.resetDelay?.(context.chatId);
+      if (result.nodeId) {
+        const entry = this.getNodeEntry(result.nodeId);
+        if (entry?.node.lockOnComplete) {
+          await this.options.conversationRecovery.lock(
+            context.chatId,
+            Date.now() + this.options.lockDurationMs,
+          );
+          await context.sendSafe(context.chatId, this.options.textConfig.lockedNotice);
+        }
+      }
       this.rememberPrompt(context.chatId);
       return true;
     }
 
-    const formatted = this.formatPrompt({ prompt: result.prompt, options: result.options ?? [] });
-    if (formatted) {
-      await context.sendSafe(context.chatId, formatted);
+    const entry = this.getNodeEntry(result.nodeId);
+    if (!entry) {
+      return true;
     }
-    this.rememberPrompt(context.chatId);
+    await this.sendPrompt(context.chatId, entry.node, entry.key, context.sendSafe);
+    await this.options.conversationRecovery.recordValidSelection(context.chatId);
+    context.resetDelay?.(context.chatId);
     return true;
+  }
+
+  private getNodeEntry(nodeId: string): { node: FlowNode; key: FlowKey } | undefined {
+    const menuNode = this.flows.menu.nodes[nodeId];
+    if (menuNode) {
+      return { node: menuNode, key: 'menu' };
+    }
+    const catalogNode = this.flows.catalog.nodes[nodeId];
+    if (catalogNode) {
+      return { node: catalogNode, key: 'catalog' };
+    }
+    return undefined;
+  }
+
+  private extractOptionsForNode(nodeId: string): NormalizedFlowOption[] | undefined {
+    const entry = this.getNodeEntry(nodeId);
+    const options = entry?.node.options;
+    if (!options || options.length === 0) {
+      return undefined;
+    }
+    return options.map((option, index) => normalizeOption(option, index));
+  }
+
+  async advanceOrRestart(context: FlowAdvanceContext): Promise<boolean> {
+    if (!context.chatId) {
+      return false;
+    }
+    if (!context.input) {
+      return false;
+    }
+
+    const lockStatus = await this.options.conversationRecovery.getLockStatus(context.chatId);
+    if (lockStatus.locked) {
+      await context.sendSafe(context.chatId, this.options.textConfig.invalidWhileLocked);
+      return true;
+    }
+
+    const normalizedInput = context.input.trim().toLowerCase();
+    if (await this.handleSuggestionConfirmation(context, normalizedInput)) {
+      return true;
+    }
+
+    if (await this.handleFallbackResponse(context, normalizedInput)) {
+      return true;
+    }
+
+    const active = await context.flowEngine.isActive(context.chatId);
+    if (!active) {
+      const resumed = await this.resumeIfPossible(context);
+      if (resumed) {
+        return true;
+      }
+      const started = await this.startInitialFlow(context.chatId, context.flowEngine, context.sendSafe);
+      if (!started) {
+        await context.sendSafe(context.chatId, context.texts.flowUnavailableText);
+        return true;
+      }
+      await this.options.conversationRecovery.recordValidSelection(context.chatId);
+      context.resetDelay?.(context.chatId);
+      return true;
+    }
+
+    const result = await context.flowEngine.advance(context.chatId, context.input);
+    return this.processAdvanceResult(context, result);
   }
 }

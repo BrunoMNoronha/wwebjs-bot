@@ -1,5 +1,5 @@
 import path from 'node:path';
-import type { Client } from 'whatsapp-web.js';
+import type { Client, MessageContent } from 'whatsapp-web.js';
 import { createCommandRegistry } from '../app/commandRegistry';
 import { FlowEngine } from '../flow-runtime/engine';
 import { RateController } from '../flow-runtime/rateController';
@@ -12,13 +12,24 @@ import {
   type FlowModuleRegistry,
 } from './flows/FlowSessionService';
 import flows from '../flows';
-import { TEXT } from '../config/messages';
+import {
+  TEXT,
+  INITIAL_MENU_TEMPLATE,
+  FALLBACK_MENU_TEMPLATE,
+  LOCK_DURATION_MS,
+  RESPONSE_BASE_DELAY_MS,
+  RESPONSE_DELAY_FACTOR,
+  FUZZY_SUGGESTION_THRESHOLD,
+  FUZZY_CONFIRMATION_THRESHOLD,
+} from '../config/messages';
 import { DEFAULT_FLOW_PROMPT_WINDOW_MS } from '../app/flowPromptTracker';
 import { createWhatsAppClientBuilder, type WhatsAppClientApp } from '../infrastructure/whatsapp/ClientFactory';
 import { createDefaultQrCodeNotifierFromEnv } from '../infrastructure/whatsapp/QrCodeNotifier';
 import { LifecycleManager, type AuthRemovalConfig, type ReconnectConfig } from '../infrastructure/whatsapp/LifecycleManager';
 import { createConsoleLikeLogger, type ConsoleLikeLogger } from '../infrastructure/logging/createConsoleLikeLogger';
 import { createStore } from '../flow-runtime/stateStore';
+import { ConversationRecoveryService } from './messaging/ConversationRecoveryService';
+import { ResponseDelayManager, type ResponseDelayManagerOptions } from './messaging/ResponseDelayManager';
 
 interface RateLimitsConfig {
   readonly perChatCooldownMs: number;
@@ -62,6 +73,7 @@ interface ApplicationContainerOverrides {
   readonly reconnect?: Partial<ReconnectConfig>;
   readonly flows?: Partial<Record<FlowKey, FlowDefinition>>;
   readonly logger?: ConsoleLikeLogger;
+  readonly responseDelay?: Partial<ResponseDelayManagerOptions>;
 }
 
 export interface ApplicationContainerOptions extends ApplicationContainerOverrides {}
@@ -136,11 +148,24 @@ export function createApplicationContainer(options: ApplicationContainerOptions 
   const config = createConfig(options);
   const logger: ConsoleLikeLogger = options.logger ?? createConsoleLikeLogger({ name: 'wwebjs-bot' });
 
+  const conversationRecovery = new ConversationRecoveryService();
+  const responseDelayManager = new ResponseDelayManager({
+    baseDelayMs: options.responseDelay?.baseDelayMs ?? RESPONSE_BASE_DELAY_MS,
+    factor: options.responseDelay?.factor ?? RESPONSE_DELAY_FACTOR,
+  });
+
   const flowSessionService = new FlowSessionService({
     flowModules: flows as FlowModuleRegistry,
     overrides: options.flows,
     menuFlowEnabled: config.menuFlowEnabled,
     promptWindowMs: config.flowPromptWindowMs,
+    conversationRecovery,
+    textConfig: TEXT,
+    initialMenuTemplate: INITIAL_MENU_TEMPLATE,
+    fallbackMenuTemplate: FALLBACK_MENU_TEMPLATE,
+    lockDurationMs: LOCK_DURATION_MS,
+    fuzzySuggestionThreshold: FUZZY_SUGGESTION_THRESHOLD,
+    fuzzyConfirmationThreshold: FUZZY_CONFIRMATION_THRESHOLD,
   });
 
   const menuFlow = flowSessionService.getFlowDefinition('menu');
@@ -177,7 +202,11 @@ export function createApplicationContainer(options: ApplicationContainerOptions 
     });
 
     builder.withHandlers(({ client }) => {
-        const sendSafe = async (chatId: string, content: string): Promise<unknown> => {
+        const sendSafe = async (chatId: string, content: MessageContent): Promise<unknown> => {
+          const delay = responseDelayManager.nextDelay(chatId);
+          if (delay > 0) {
+            await new Promise((resolve) => setTimeout(resolve, delay));
+          }
           return rate.withSend(chatId, () => client.sendMessage(chatId, content));
         };
 
@@ -209,7 +238,7 @@ export function createApplicationContainer(options: ApplicationContainerOptions 
             }
             await lifecycle.restart();
           },
-          welcomeText: TEXT.welcome,
+          welcomeText: `${TEXT.welcomeHeader}\n${TEXT.welcomeBody}`,
           flowUnavailableText: config.flowUnavailableText,
           shutdownNotice: config.shutdownNotice,
           restartNotice: config.restartNotice,
@@ -222,6 +251,7 @@ export function createApplicationContainer(options: ApplicationContainerOptions 
           flowEngine,
           flowSessionService,
           sendSafe,
+          resetDelay: (chatId) => responseDelayManager.reset(chatId),
           flowUnavailableText: config.flowUnavailableText,
           expiredFlowText: config.expiredFlowText,
           invalidOptionText: config.invalidOptionText,

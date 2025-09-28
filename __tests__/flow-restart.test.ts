@@ -1,204 +1,144 @@
+import { List } from 'whatsapp-web.js';
+import { FlowEngine } from '../src/flow-runtime/engine';
+import { createStore } from '../src/flow-runtime/stateStore';
 import {
   FlowSessionService,
+  type FlowAdvanceTexts,
   type FlowDefinition,
   type FlowModuleRegistry,
-  type FlowRuntimeEngine,
-  type FlowNode,
 } from '../src/application/flows/FlowSessionService';
+import { ConversationRecoveryService } from '../src/application/messaging/ConversationRecoveryService';
+import {
+  TEXT,
+  INITIAL_MENU_TEMPLATE,
+  FALLBACK_MENU_TEMPLATE,
+  LOCK_DURATION_MS,
+  FUZZY_SUGGESTION_THRESHOLD,
+  FUZZY_CONFIRMATION_THRESHOLD,
+} from '../src/config/messages';
+import { menuFlow } from '../src/flows/menu';
 
-describe('FlowSessionService', () => {
+const catalogFlow: FlowDefinition = {
+  start: 'catalog:start',
+  nodes: {
+    'catalog:start': {
+      id: 'catalog:start',
+      prompt: 'Escolha uma categoria',
+      options: [
+        { id: 'produtos', text: 'Produtos', aliases: ['1'], next: 'catalog:produtos' },
+      ],
+    },
+    'catalog:produtos': {
+      id: 'catalog:produtos',
+      prompt: 'Lista de produtos',
+      terminal: true,
+    },
+  },
+};
+
+const flowModules: FlowModuleRegistry = {
+  menu: { flow: menuFlow },
+  catalog: { flow: catalogFlow },
+};
+
+const texts: FlowAdvanceTexts = {
+  expiredFlowText: 'Sua sessão anterior foi encerrada.',
+  flowUnavailableText: 'Fluxo indisponível no momento.',
+  invalidOptionText: 'Opção inválida.',
+  genericFlowErrorText: 'Erro no fluxo.',
+};
+
+describe('FlowSessionService conversational behaviour', () => {
   const chatId = '5511987654321@c.us';
-  const menuFlow: FlowDefinition = {
-    start: 'menu:root',
-    nodes: {
-      'menu:root': {
-        prompt: 'Como podemos te ajudar hoje?',
-        options: [
-          { text: 'Ver catálogo', next: 'catalog:start' },
-        ],
-      },
-      'catalog:start': {
-        prompt: 'Escolha uma categoria',
-        terminal: true,
-      },
-    },
-  };
-  const catalogFlow: FlowDefinition = {
-    start: 'catalog:root',
-    nodes: {
-      'catalog:root': {
-        prompt: 'Escolha uma categoria',
-        options: [
-          { text: 'Produtos', next: 'catalog:products' },
-        ],
-      },
-      'catalog:products': {
-        prompt: 'Lista de produtos',
-        terminal: true,
-      },
-    },
-  };
+  let service: FlowSessionService;
+  let engine: FlowEngine;
+  let sendSafe: jest.Mock<Promise<void>, [string, unknown]>;
+  let resetDelay: jest.Mock<void, [string]>;
 
-  const flowModules: FlowModuleRegistry = {
-    menu: { flow: menuFlow },
-    catalog: { flow: catalogFlow },
-  };
-
-  class FlowEngineMock implements FlowRuntimeEngine {
-    public readonly startMock = jest.fn<Promise<{ ok: boolean; node?: FlowNode }>, [string, FlowDefinition]>();
-
-    public readonly advanceMock = jest.fn<
-      Promise<
-        | { ok: false; error: string; expected?: string[]; nodeId?: string }
-        | { ok: true; terminal: boolean; prompt?: string; options?: string[] }
-      >,
-      [string, string]
-    >();
-
-    public readonly cancelMock = jest.fn<Promise<void>, [string]>();
-
-    public readonly isActiveMock = jest.fn<Promise<boolean>, [string]>();
-
-    async start(chatIdInput: string, flow: FlowDefinition): Promise<{ ok: boolean; node?: FlowNode }> {
-      return this.startMock(chatIdInput, flow);
-    }
-
-    async advance(chatIdInput: string, inputRaw: string): Promise<
-      | { ok: false; error: string; expected?: string[]; nodeId?: string }
-      | { ok: true; terminal: boolean; prompt?: string; options?: string[] }
-    > {
-      return this.advanceMock(chatIdInput, inputRaw);
-    }
-
-    async cancel(chatIdInput: string): Promise<void> {
-      await this.cancelMock(chatIdInput);
-    }
-
-    async isActive(chatIdInput: string): Promise<boolean> {
-      return this.isActiveMock(chatIdInput);
-    }
-  }
-
-  const createService = (menuFlowEnabled: boolean): FlowSessionService => {
-    return new FlowSessionService({
+  beforeEach(() => {
+    service = new FlowSessionService({
       flowModules,
-      menuFlowEnabled,
-      promptWindowMs: 10_000,
+      menuFlowEnabled: true,
+      promptWindowMs: 60_000,
+      conversationRecovery: new ConversationRecoveryService(),
+      textConfig: TEXT,
+      initialMenuTemplate: INITIAL_MENU_TEMPLATE,
+      fallbackMenuTemplate: FALLBACK_MENU_TEMPLATE,
+      lockDurationMs: LOCK_DURATION_MS,
+      fuzzySuggestionThreshold: FUZZY_SUGGESTION_THRESHOLD,
+      fuzzyConfirmationThreshold: FUZZY_CONFIRMATION_THRESHOLD,
     });
-  };
-
-  const texts = {
-    expiredFlowText: 'Sua sessão anterior foi encerrada.',
-    flowUnavailableText: 'Fluxo indisponível no momento.',
-    invalidOptionText: 'Opção inválida.',
-    genericFlowErrorText: 'Erro no fluxo.',
-  } as const;
-
-  test('resumeIfPossible reinicia o menu quando há prompt recente', async () => {
-    const service = createService(true);
-    const engine = new FlowEngineMock();
-    const sendSafe = jest.fn<Promise<void>, [string, string]>().mockResolvedValue(undefined);
-
-    service.rememberPrompt(chatId, 'menu');
-
-    engine.startMock.mockResolvedValue({ ok: true, node: menuFlow.nodes['menu:root'] });
-
-    const handled = await service.resumeIfPossible({
-      chatId,
-      input: '1',
-      flowEngine: engine,
-      sendSafe,
-      texts,
-    });
-
-    expect(handled).toBe(true);
-    expect(engine.startMock).toHaveBeenCalledWith(chatId, menuFlow);
-    expect(sendSafe).toHaveBeenNthCalledWith(1, chatId, texts.expiredFlowText);
-    expect(sendSafe).toHaveBeenNthCalledWith(2, chatId, 'Como podemos te ajudar hoje?\n1. Ver catálogo');
+    engine = new FlowEngine(createStore());
+    sendSafe = jest.fn<Promise<void>, [string, unknown]>().mockResolvedValue(undefined);
+    resetDelay = jest.fn<void, [string]>();
   });
 
-  test('resumeIfPossible redireciona para o catálogo quando menu está desabilitado', async () => {
-    const service = createService(false);
-    const engine = new FlowEngineMock();
-    const sendSafe = jest.fn<Promise<void>, [string, string]>().mockResolvedValue(undefined);
-
-    service.rememberPrompt(chatId, 'menu');
-
-    engine.startMock.mockResolvedValue({ ok: true, node: catalogFlow.nodes['catalog:root'] });
-
-    const handled = await service.resumeIfPossible({
-      chatId,
-      input: '1',
-      flowEngine: engine,
-      sendSafe,
-      texts,
-    });
-
-    expect(handled).toBe(true);
-    expect(engine.startMock).toHaveBeenCalledWith(chatId, catalogFlow);
-    expect(sendSafe).toHaveBeenNthCalledWith(2, chatId, 'Escolha uma categoria\n1. Produtos');
+  const buildContext = (input: string) => ({
+    chatId,
+    input,
+    flowEngine: engine,
+    sendSafe,
+    resetDelay,
+    texts,
   });
 
-  test('advanceOrRestart devolve erro amigável quando opção é inválida', async () => {
-    const service = createService(true);
-    const engine = new FlowEngineMock();
-    const sendSafe = jest.fn<Promise<void>, [string, string]>().mockResolvedValue(undefined);
-
-    engine.isActiveMock.mockResolvedValue(true);
-    engine.advanceMock.mockResolvedValue({ ok: false, error: 'input_invalido' });
-
-    const handled = await service.advanceOrRestart({
-      chatId,
-      input: '99',
-      flowEngine: engine,
-      sendSafe,
-      texts,
-    });
-
+  test('starts the welcome menu on first contact', async () => {
+    const handled = await service.advanceOrRestart(buildContext('olá'));
     expect(handled).toBe(true);
-    expect(sendSafe).toHaveBeenCalledWith(chatId, texts.invalidOptionText);
-    expect(engine.cancelMock).not.toHaveBeenCalled();
+    expect(sendSafe).toHaveBeenCalledTimes(2);
+    expect(sendSafe.mock.calls[0][0]).toBe(chatId);
+    expect(sendSafe.mock.calls[0][1]).toContain(TEXT.welcomeHeader);
+    expect(sendSafe.mock.calls[1][1]).toBeInstanceOf(List);
+    expect(resetDelay).toHaveBeenCalledWith(chatId);
   });
 
-  test('advanceOrRestart reinicia fluxo expirado quando há input numérico', async () => {
-    const service = createService(true);
-    const engine = new FlowEngineMock();
-    const sendSafe = jest.fn<Promise<void>, [string, string]>().mockResolvedValue(undefined);
+  test('controls invalid attempts and escalates to fallback menu', async () => {
+    await service.advanceOrRestart(buildContext('primeiro contato'));
+    sendSafe.mockClear();
 
-    service.rememberPrompt(chatId, 'menu');
-    engine.isActiveMock.mockResolvedValue(false);
-    engine.startMock.mockResolvedValue({ ok: true, node: menuFlow.nodes['menu:root'] });
+    await service.advanceOrRestart(buildContext('mensagem livre'));
+    expect(sendSafe).toHaveBeenCalledTimes(2);
+    expect(String(sendSafe.mock.calls[0][1])).toContain(TEXT.friendlyRetry.split(' ')[0]);
+    expect(sendSafe.mock.calls[1][1]).toBeInstanceOf(List);
 
-    const handled = await service.advanceOrRestart({
-      chatId,
-      input: '1',
-      flowEngine: engine,
-      sendSafe,
-      texts,
-    });
+    sendSafe.mockClear();
+    await service.advanceOrRestart(buildContext('segunda mensagem sem opção'));
+    expect(String(sendSafe.mock.calls[0][1])).toContain(TEXT.fallbackRetry.split(' ')[0]);
+    expect(sendSafe.mock.calls[1][1]).toBeInstanceOf(List);
 
-    expect(handled).toBe(true);
-    expect(engine.startMock).toHaveBeenCalledWith(chatId, menuFlow);
-    expect(sendSafe).toHaveBeenNthCalledWith(2, chatId, 'Como podemos te ajudar hoje?\n1. Ver catálogo');
+    sendSafe.mockClear();
+    await service.advanceOrRestart(buildContext('terceira mensagem inválida'));
+    expect(sendSafe).toHaveBeenCalledTimes(2);
+    expect(String(sendSafe.mock.calls[0][1])).toContain(TEXT.fallbackClosure.split(' ')[0]);
+    expect(String(sendSafe.mock.calls[1][1])).toContain(TEXT.lockedNotice.split(' ')[0]);
   });
 
-  test('advanceOrRestart retorna false quando não há prompt recente nem fluxo ativo', async () => {
-    const service = createService(true);
-    const engine = new FlowEngineMock();
-    const sendSafe = jest.fn<Promise<void>, [string, string]>().mockResolvedValue(undefined);
+  test('suggests closest option and advances after confirmation', async () => {
+    await service.advanceOrRestart(buildContext('oi'));
+    sendSafe.mockClear();
 
-    engine.isActiveMock.mockResolvedValue(false);
+    await service.advanceOrRestart(buildContext('solicitar orcament'));
+    const suggestionMessage = String(sendSafe.mock.calls[0][1]);
+    expect(suggestionMessage).toContain('Encontrei uma opção parecida');
 
-    const handled = await service.advanceOrRestart({
-      chatId,
-      input: 'texto livre',
-      flowEngine: engine,
-      sendSafe,
-      texts,
-    });
+    sendSafe.mockClear();
+    await service.advanceOrRestart(buildContext('sim'));
+    expect(sendSafe).toHaveBeenCalled();
+    const terminalMessage = String(sendSafe.mock.calls[0][1]);
+    expect(terminalMessage).toContain('Envie uma foto do seu tênis');
+  });
 
-    expect(handled).toBe(false);
-    expect(engine.startMock).not.toHaveBeenCalled();
-    expect(sendSafe).not.toHaveBeenCalled();
+  test('locks conversation after choosing outras informações', async () => {
+    await service.advanceOrRestart(buildContext('olá'));
+    sendSafe.mockClear();
+
+    await service.advanceOrRestart(buildContext('4'));
+    expect(sendSafe).toHaveBeenCalledTimes(2);
+    expect(String(sendSafe.mock.calls[0][1])).toContain('Claro!');
+    expect(String(sendSafe.mock.calls[1][1])).toContain(TEXT.lockedNotice.split(' ')[0]);
+
+    sendSafe.mockClear();
+    await service.advanceOrRestart(buildContext('mensagem durante bloqueio'));
+    expect(String(sendSafe.mock.calls[0][1])).toContain(TEXT.invalidWhileLocked.split(' ')[0]);
   });
 });
