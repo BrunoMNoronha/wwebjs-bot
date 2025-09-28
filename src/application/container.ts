@@ -167,6 +167,7 @@ export function createApplicationContainer(options: ApplicationContainerOptions 
     lockDurationMs: LOCK_DURATION_MS,
     fuzzySuggestionThreshold: FUZZY_SUGGESTION_THRESHOLD,
     fuzzyConfirmationThreshold: FUZZY_CONFIRMATION_THRESHOLD,
+    logger,
   });
 
   const menuFlow = flowSessionService.getFlowDefinition('menu');

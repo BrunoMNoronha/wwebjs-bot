@@ -155,4 +155,47 @@ describe('FlowSessionService conversational behaviour', () => {
     expect(sendSafe).not.toHaveBeenCalled();
     expect(resetDelay).not.toHaveBeenCalled();
   });
+
+  test('libera bloqueio após TTL utilizando fakeTimers', async () => {
+    const baseNow: number = Date.now();
+    jest.useFakeTimers({ now: baseNow, doNotFake: ['nextTick'] });
+    try {
+      const nowFn = (): number => Date.now();
+      conversationRecovery = new ConversationRecoveryService({ now: nowFn });
+      service = new FlowSessionService({
+        flowModules,
+        menuFlowEnabled: true,
+        promptWindowMs: 60_000,
+        conversationRecovery,
+        textConfig: TEXT,
+        initialMenuTemplate: INITIAL_MENU_TEMPLATE,
+        fallbackMenuTemplate: FALLBACK_MENU_TEMPLATE,
+        lockDurationMs: 5_000,
+        fuzzySuggestionThreshold: FUZZY_SUGGESTION_THRESHOLD,
+        fuzzyConfirmationThreshold: FUZZY_CONFIRMATION_THRESHOLD,
+      });
+
+      await service.advanceOrRestart(buildContext('olá'));
+      sendSafe.mockClear();
+
+      await service.advanceOrRestart(buildContext('4'));
+      const statusAfterLock = await conversationRecovery.getLockStatus(chatId);
+      expect(statusAfterLock.locked).toBe(true);
+
+      jest.advanceTimersByTime(5_001);
+      await conversationRecovery.getLockStatus(chatId);
+
+      sendSafe.mockClear();
+      resetDelay.mockClear();
+
+      await service.advanceOrRestart(buildContext('olá de novo'));
+      expect(sendSafe).toHaveBeenCalled();
+      expect(resetDelay).toHaveBeenCalledWith(chatId);
+
+      const finalStatus = await conversationRecovery.getLockStatus(chatId);
+      expect(finalStatus.locked).toBe(false);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });
