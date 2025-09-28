@@ -1,3 +1,5 @@
+import { Searcher, sortKind, type FullOptions } from 'fast-fuzzy';
+
 export interface RawFlowOption {
   readonly id?: string;
   readonly key?: string;
@@ -30,15 +32,26 @@ export interface ValidationResult {
 
 export type MatchKind = 'id' | 'index' | 'alias' | 'text';
 
-export interface OptionMatch {
-  readonly kind: MatchKind;
+export interface BaseOptionMatch {
   readonly matchedBy: MatchKind;
   readonly option: NormalizedFlowOption;
   readonly key: string;
+  readonly confidence: number;
 }
 
+export interface ExactOptionMatch extends BaseOptionMatch {
+  readonly kind: 'exact';
+}
+
+export interface SuggestionOptionMatch extends BaseOptionMatch {
+  readonly kind: 'suggestion';
+}
+
+export type OptionMatch = ExactOptionMatch | SuggestionOptionMatch;
+
 export interface OptionMatcher {
-  match(inputRaw: string): OptionMatch | null;
+  match(inputRaw: string): ExactOptionMatch | null;
+  matchOption(inputRaw: string, cfg?: SuggestionConfig): OptionMatch | null;
 }
 
 export interface SuggestionResult {
@@ -52,6 +65,88 @@ export interface MatcherConfig {
 
 export interface SuggestionConfig {
   readonly minimumConfidence: number;
+}
+
+interface SuggestionCandidate {
+  readonly option: NormalizedFlowOption;
+  readonly normalizedText: string;
+}
+
+interface SuggestionEngine {
+  suggest(input: string, minimumConfidence: number): SuggestionResult | null;
+}
+
+const FAST_FUZZY_MIN_CANDIDATES = 25;
+
+class LevenshteinSuggestionEngine implements SuggestionEngine {
+  constructor(private readonly candidates: readonly SuggestionCandidate[]) {}
+
+  suggest(input: string, minimumConfidence: number): SuggestionResult | null {
+    const normalizedInput = normalizeText(input);
+    if (!normalizedInput) {
+      return null;
+    }
+    let best: SuggestionResult | null = null;
+    this.candidates.forEach((candidate) => {
+      const denominator = Math.max(normalizedInput.length, candidate.normalizedText.length);
+      if (denominator === 0) {
+        return;
+      }
+      const distance = levenshteinDistance(normalizedInput, candidate.normalizedText);
+      const confidence = 1 - distance / denominator;
+      if (confidence >= minimumConfidence) {
+        if (!best || confidence > best.confidence) {
+          best = { option: candidate.option, confidence };
+        }
+      }
+    });
+    return best;
+  }
+}
+
+type FastFuzzyOptions = FullOptions<SuggestionCandidate> & { readonly returnMatchData: true };
+
+class FastFuzzySuggestionEngine implements SuggestionEngine {
+  private readonly searcher: Searcher<SuggestionCandidate, FastFuzzyOptions>;
+
+  constructor(candidates: readonly SuggestionCandidate[]) {
+    const options: FastFuzzyOptions = {
+      keySelector: (candidate) => candidate.normalizedText,
+      ignoreCase: false,
+      ignoreSymbols: false,
+      normalizeWhitespace: true,
+      returnMatchData: true,
+      sortBy: sortKind.bestMatch,
+      threshold: 0,
+    };
+    this.searcher = new Searcher([...candidates], options);
+  }
+
+  suggest(input: string, minimumConfidence: number): SuggestionResult | null {
+    const normalizedInput = normalizeText(input);
+    if (!normalizedInput) {
+      return null;
+    }
+    const matches = this.searcher.search(normalizedInput, {
+      threshold: minimumConfidence,
+      returnMatchData: true,
+    });
+    if (!Array.isArray(matches) || matches.length === 0) {
+      return null;
+    }
+    const best = matches[0];
+    return { option: best.item.option, confidence: best.score };
+  }
+}
+
+function createSuggestionEngine(candidates: readonly SuggestionCandidate[]): SuggestionEngine | null {
+  if (candidates.length === 0) {
+    return null;
+  }
+  if (candidates.length >= FAST_FUZZY_MIN_CANDIDATES) {
+    return new FastFuzzySuggestionEngine(candidates);
+  }
+  return new LevenshteinSuggestionEngine(candidates);
 }
 
 export function normalizeText(value: string | undefined): string {
@@ -150,6 +245,8 @@ export function buildOptionMatcher(
     'originalIndex' in option ? option : normalizeOption(option, index),
   );
 
+  const suggestionCandidates: SuggestionCandidate[] = [];
+
   normalizedOptions.forEach((option, index) => {
     if (option.id) {
       byId.set(option.id, option);
@@ -157,6 +254,7 @@ export function buildOptionMatcher(
     const normalizedText = normalizeText(option.text);
     if (normalizedText) {
       byNormalized.set(`t:${normalizedText}`, option);
+      suggestionCandidates.push({ option, normalizedText });
     }
     option.aliases.forEach((alias) => {
       const normalizedAlias = normalizeText(alias);
@@ -169,47 +267,89 @@ export function buildOptionMatcher(
     }
   });
 
-  return {
-    match(inputRaw: string): OptionMatch | null {
-      if (inputRaw == null) {
-        return null;
-      }
-      const raw = String(inputRaw).trim();
-      if (byId.has(raw)) {
-        return { kind: 'id', matchedBy: 'id', option: byId.get(raw) as NormalizedFlowOption, key: raw };
-      }
-      if (allowIndex && /^\d+$/.test(raw)) {
-        const normalizedIndexKey = `i:${Number(raw)}`;
-        if (byNormalized.has(normalizedIndexKey)) {
-          return {
-            kind: 'index',
-            matchedBy: 'index',
-            option: byNormalized.get(normalizedIndexKey) as NormalizedFlowOption,
-            key: raw,
-          };
-        }
-      }
-      const normalizedValue = normalizeText(raw);
-      const aliasKey = `a:${normalizedValue}`;
-      if (byNormalized.has(aliasKey)) {
-        return {
-          kind: 'alias',
-          matchedBy: 'alias',
-          option: byNormalized.get(aliasKey) as NormalizedFlowOption,
-          key: normalizedValue,
-        };
-      }
-      const textKey = `t:${normalizedValue}`;
-      if (byNormalized.has(textKey)) {
-        return {
-          kind: 'text',
-          matchedBy: 'text',
-          option: byNormalized.get(textKey) as NormalizedFlowOption,
-          key: normalizedValue,
-        };
-      }
+  const suggestionEngine = createSuggestionEngine(suggestionCandidates);
+
+  const matchExact = (inputRaw: string): ExactOptionMatch | null => {
+    if (inputRaw == null) {
       return null;
-    },
+    }
+    const raw = String(inputRaw).trim();
+    if (!raw) {
+      return null;
+    }
+    if (byId.has(raw)) {
+      return {
+        kind: 'exact',
+        matchedBy: 'id',
+        option: byId.get(raw) as NormalizedFlowOption,
+        key: raw,
+        confidence: 1,
+      };
+    }
+    if (allowIndex && /^\d+$/.test(raw)) {
+      const normalizedIndexKey = `i:${Number(raw)}`;
+      if (byNormalized.has(normalizedIndexKey)) {
+        return {
+          kind: 'exact',
+          matchedBy: 'index',
+          option: byNormalized.get(normalizedIndexKey) as NormalizedFlowOption,
+          key: raw,
+          confidence: 1,
+        };
+      }
+    }
+    const normalizedValue = normalizeText(raw);
+    if (!normalizedValue) {
+      return null;
+    }
+    const aliasKey = `a:${normalizedValue}`;
+    if (byNormalized.has(aliasKey)) {
+      return {
+        kind: 'exact',
+        matchedBy: 'alias',
+        option: byNormalized.get(aliasKey) as NormalizedFlowOption,
+        key: normalizedValue,
+        confidence: 1,
+      };
+    }
+    const textKey = `t:${normalizedValue}`;
+    if (byNormalized.has(textKey)) {
+      return {
+        kind: 'exact',
+        matchedBy: 'text',
+        option: byNormalized.get(textKey) as NormalizedFlowOption,
+        key: normalizedValue,
+        confidence: 1,
+      };
+    }
+    return null;
+  };
+
+  const matchOption = (inputRaw: string, suggestionCfg?: SuggestionConfig): OptionMatch | null => {
+    const exact = matchExact(inputRaw);
+    if (exact) {
+      return exact;
+    }
+    if (!suggestionEngine) {
+      return null;
+    }
+    const minimumConfidence = suggestionCfg?.minimumConfidence ?? 0.5;
+    const suggestion = suggestionEngine.suggest(inputRaw, minimumConfidence);
+    if (!suggestion) {
+      return null;
+    }
+    return {
+      kind: 'suggestion',
+      matchedBy: 'text',
+      option: suggestion.option,
+      key: normalizeText(inputRaw),
+      confidence: suggestion.confidence,
+    };
+  };
+
+  return {
+    match: matchExact,
+    matchOption,
   };
 }
 
@@ -241,30 +381,10 @@ export function findBestSuggestion(
   options: readonly NormalizedFlowOption[],
   cfg: SuggestionConfig,
 ): SuggestionResult | null {
-  if (!inputRaw.trim()) {
+  const matcher = buildOptionMatcher(options);
+  const match = matcher.matchOption(inputRaw, cfg);
+  if (!match || match.kind !== 'suggestion') {
     return null;
   }
-  const normalizedInput = normalizeText(inputRaw);
-  if (!normalizedInput) {
-    return null;
-  }
-  let best: SuggestionResult | null = null;
-  options.forEach((option) => {
-    const candidate = normalizeText(option.text);
-    if (!candidate) {
-      return;
-    }
-    const distance = levenshteinDistance(normalizedInput, candidate);
-    const denominator = Math.max(normalizedInput.length, candidate.length);
-    if (denominator === 0) {
-      return;
-    }
-    const confidence = 1 - distance / denominator;
-    if (confidence >= cfg.minimumConfidence) {
-      if (!best || confidence > best.confidence) {
-        best = { option, confidence };
-      }
-    }
-  });
-  return best;
+  return { option: match.option, confidence: match.confidence };
 }

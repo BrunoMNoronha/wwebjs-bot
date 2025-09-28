@@ -10,6 +10,7 @@ export interface ConversationState {
   readonly attempts: number;
   readonly phase: RecoveryPhase;
   readonly pendingSuggestion?: PendingSuggestionState;
+  readonly awaitingConfirmation?: boolean;
   readonly lockedUntil?: number;
   readonly updatedAt: number;
 }
@@ -82,20 +83,32 @@ export class ConversationRecoveryService {
       attempts: 0,
       phase: 'initial',
       pendingSuggestion: undefined,
+      awaitingConfirmation: false,
       lockedUntil: undefined,
       updatedAt: this.now(),
     });
   }
 
-  async recordInvalidAttempt(chatId: string): Promise<AttemptStatus> {
+  async recordInvalidAttempt(
+    chatId: string,
+    options: { readonly skipIfAwaitingConfirmation?: boolean } = {},
+  ): Promise<AttemptStatus> {
     const current = (await this.getState(chatId)) ?? {
       attempts: 0,
       phase: 'initial' as RecoveryPhase,
+      awaitingConfirmation: false,
       updatedAt: this.now(),
     };
-    const attempts = current.attempts + 1;
-    const phase: RecoveryPhase = attempts >= 2 ? 'fallback' : 'initial';
-    await this.save(chatId, { ...current, attempts, phase, pendingSuggestion: undefined });
+    const shouldSkip = options.skipIfAwaitingConfirmation === true && current.awaitingConfirmation === true;
+    const attempts = shouldSkip ? current.attempts : current.attempts + 1;
+    const phase: RecoveryPhase = shouldSkip ? current.phase : attempts >= 2 ? 'fallback' : 'initial';
+    await this.save(chatId, {
+      ...current,
+      attempts,
+      phase,
+      pendingSuggestion: undefined,
+      awaitingConfirmation: false,
+    });
     return { attempts, phase };
   }
 
@@ -103,9 +116,10 @@ export class ConversationRecoveryService {
     const current = (await this.getState(chatId)) ?? {
       attempts: 0,
       phase: 'initial' as RecoveryPhase,
+      awaitingConfirmation: false,
       updatedAt: this.now(),
     };
-    await this.save(chatId, { ...current, pendingSuggestion: suggestion });
+    await this.save(chatId, { ...current, pendingSuggestion: suggestion, awaitingConfirmation: true });
   }
 
   async consumePendingSuggestion(chatId: string): Promise<PendingSuggestionState | undefined> {
@@ -113,7 +127,7 @@ export class ConversationRecoveryService {
     if (!current?.pendingSuggestion) {
       return undefined;
     }
-    await this.save(chatId, { ...current, pendingSuggestion: undefined });
+    await this.save(chatId, { ...current, pendingSuggestion: undefined, awaitingConfirmation: false });
     return current.pendingSuggestion;
   }
 
@@ -126,6 +140,7 @@ export class ConversationRecoveryService {
     const current = (await this.getState(chatId)) ?? {
       attempts: 0,
       phase: 'initial' as RecoveryPhase,
+      awaitingConfirmation: false,
       updatedAt: this.now(),
     };
     await this.save(chatId, { ...current, lockedUntil });
@@ -156,6 +171,7 @@ export class ConversationRecoveryService {
     const current = (await this.getState(chatId)) ?? {
       attempts: 0,
       phase: 'initial' as RecoveryPhase,
+      awaitingConfirmation: false,
       updatedAt: this.now(),
     };
     return { attempts: current.attempts, phase: current.phase };

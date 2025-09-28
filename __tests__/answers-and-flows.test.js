@@ -31,6 +31,7 @@ describe('answers | opções de respostas', () => {
     expect(matcher.match('2')?.option.id).toBe('2');               // id
     expect(matcher.match('go')?.option.id).toBe('1');              // alias
     expect(matcher.match('continuar')?.option.id).toBe('1');       // texto normalizado
+    expect(matcher.match('1')?.kind).toBe('exact');
     expect(matcher.match('1')?.matchedBy).toBe('id');
     expect(matcher.match('2')?.matchedBy).toBe('id');
     expect(matcher.match('3')).toBeNull();
@@ -44,6 +45,19 @@ describe('answers | opções de respostas', () => {
     const matcher = buildOptionMatcher(options);
     expect(matcher.match('1')?.option.id).toBe('a'); // índice 1
     expect(matcher.match('segunda')?.option.id).toBe('b'); // texto normalizado
+  });
+
+  test('matchOption sugere melhor correspondência com confiança', () => {
+    const options = [
+      { id: 'orcamento', text: 'Solicitar orçamento' },
+      { id: 'andamento', text: 'Verificar andamento da OS' }
+    ];
+    const matcher = buildOptionMatcher(options);
+    const result = matcher.matchOption('solicitar orcament', { minimumConfidence: 0.4 });
+    expect(result).not.toBeNull();
+    expect(result.kind).toBe('suggestion');
+    expect(result.option.id).toBe('orcamento');
+    expect(result.confidence).toBeGreaterThanOrEqual(0.4);
   });
 });
 

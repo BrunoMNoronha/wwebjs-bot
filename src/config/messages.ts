@@ -110,5 +110,24 @@ export const FALLBACK_MENU_TEMPLATE: MenuTemplate = {
 export const LOCK_DURATION_MS = 15 * 60 * 1000;
 export const RESPONSE_BASE_DELAY_MS = 5_000;
 export const RESPONSE_DELAY_FACTOR = 1.5;
-export const FUZZY_SUGGESTION_THRESHOLD = 0.45;
-export const FUZZY_CONFIRMATION_THRESHOLD = 0.75;
+
+function readThresholdFromEnv(envKey: string, fallback: number): number {
+  const raw = process.env[envKey];
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  if (Number.isNaN(parsed)) {
+    return fallback;
+  }
+  if (parsed < 0) {
+    return 0;
+  }
+  if (parsed > 1) {
+    return 1;
+  }
+  return parsed;
+}
+
+export const FUZZY_SUGGESTION_THRESHOLD = readThresholdFromEnv('FUZZY_SUGGESTION_THRESHOLD', 0.45);
+export const FUZZY_CONFIRMATION_THRESHOLD = readThresholdFromEnv('FUZZY_CONFIRMATION_THRESHOLD', 0.75);
