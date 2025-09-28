@@ -1,8 +1,20 @@
 const fs = require('fs/promises');
 const path = require('path');
 const { TEXT } = require('./src/config/messages');
-const { flow: CatalogFlow } = require('./src/flows/catalog');
-const { flow: MenuFlow } = require('./src/flows/menu');
+const flows = require('./src/flows');
+/**
+ * @template T
+ * @param {{ flow?: T } | T} entry
+ * @returns {T}
+ */
+function resolveFlow(entry) {
+    if (entry && typeof entry === 'object' && 'flow' in entry && entry.flow) {
+        return /** @type {T} */ (entry.flow);
+    }
+    return /** @type {T} */ (entry);
+}
+const CatalogFlow = resolveFlow(flows.catalog);
+const MenuFlow = resolveFlow(flows.menu);
 const { createApp } = require('./src/app/appFactory');
 const { createCommandRegistry } = require('./src/app/commandRegistry');
 const {

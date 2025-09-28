@@ -24,6 +24,7 @@ npm test
 
 ## Estrutura
 - `main.js`: inicialização do cliente e handlers de mensagens.
+- `src/flows/index.js`: aplica o padrão Registry; basta criar um novo arquivo `.js` em `src/flows/` que o fluxo será descoberto automaticamente.
 - `src/validation/answers.js`: validação de opções e matcher.
 - `src/validation/flows.js`: validação e simulação de fluxos de decisão.
 - `__tests__/`: testes unitários e mocks.
