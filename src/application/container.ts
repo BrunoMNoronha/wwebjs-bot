@@ -25,6 +25,12 @@ import { createConsoleLikeLogger, type ConsoleLikeLogger } from '../infrastructu
 import { createStore } from '../flow-runtime/stateStore';
 import { ConversationRecoveryService } from './messaging/ConversationRecoveryService';
 import { ResponseDelayManager, type ResponseDelayManagerOptions } from './messaging/ResponseDelayManager';
+import {
+  ClientMessageSender,
+  DelayedMessageSender,
+  RateLimitedMessageSender,
+  type MessageSender,
+} from './messaging/MessageSender';
 
 interface RateLimitsConfig {
   readonly perChatCooldownMs: number;
@@ -197,12 +203,12 @@ export function createApplicationContainer(options: ApplicationContainerOptions 
     });
 
     builder.withHandlers(({ client }) => {
+        const baseSender: MessageSender = new ClientMessageSender(client);
+        const rateLimited: MessageSender = new RateLimitedMessageSender(baseSender, rate);
+        const delayed: MessageSender = new DelayedMessageSender(rateLimited, responseDelayManager);
+
         const sendSafe = async (chatId: string, content: MessageContent): Promise<unknown> => {
-          const delay = responseDelayManager.nextDelay(chatId);
-          if (delay > 0) {
-            await new Promise((resolve) => setTimeout(resolve, delay));
-          }
-          return rate.withSend(chatId, () => client.sendMessage(chatId, content));
+          return delayed.send(chatId, content);
         };
 
         const commandRegistry = createCommandRegistry({
