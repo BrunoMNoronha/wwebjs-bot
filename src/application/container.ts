@@ -17,6 +17,7 @@ import { DEFAULT_FLOW_PROMPT_WINDOW_MS } from '../app/flowPromptTracker';
 import { createWhatsAppClientBuilder, type WhatsAppClientApp } from '../infrastructure/whatsapp/ClientFactory';
 import { createDefaultQrCodeNotifierFromEnv } from '../infrastructure/whatsapp/QrCodeNotifier';
 import { LifecycleManager, type AuthRemovalConfig, type ReconnectConfig } from '../infrastructure/whatsapp/LifecycleManager';
+import { createConsoleLikeLogger, type ConsoleLikeLogger } from '../infrastructure/logging/createConsoleLikeLogger';
 
 interface RateLimitsConfig {
   readonly perChatCooldownMs: number;
@@ -59,6 +60,7 @@ interface ApplicationContainerOverrides {
   readonly authRemoval?: Partial<AuthRemovalConfig>;
   readonly reconnect?: Partial<ReconnectConfig>;
   readonly flows?: Partial<Record<FlowKey, FlowDefinition>>;
+  readonly logger?: ConsoleLikeLogger;
 }
 
 export interface ApplicationContainerOptions extends ApplicationContainerOverrides {}
@@ -129,6 +131,7 @@ export interface ApplicationContainer {
 
 export function createApplicationContainer(options: ApplicationContainerOptions = {}): ApplicationContainer {
   const config = createConfig(options);
+  const logger: ConsoleLikeLogger = options.logger ?? createConsoleLikeLogger({ name: 'wwebjs-bot' });
 
   const flowSessionService = new FlowSessionService({
     flowModules: flows as FlowModuleRegistry,
@@ -159,11 +162,14 @@ export function createApplicationContainer(options: ApplicationContainerOptions 
 
     const lifecycleRef: { current: LifecycleManager | null } = { current: null };
 
+    const qrNotifier = createDefaultQrCodeNotifierFromEnv(process.env, logger);
+
     const builder = createWhatsAppClientBuilder({
       authDir: config.authDir,
       flowEngine,
       rate,
-      qrNotifier: createDefaultQrCodeNotifierFromEnv(),
+      qrNotifier,
+      logger,
     });
 
     builder.withHandlers(({ client }) => {
@@ -270,6 +276,7 @@ export function createApplicationContainer(options: ApplicationContainerOptions 
       authDir: config.authDir,
       authRemoval: config.authRemoval,
       reconnect: config.reconnect,
+      logger,
     });
     lifecycleRef.current = lifecycle;
 

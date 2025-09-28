@@ -176,6 +176,12 @@ npm run test:coverage
 
 ## 🔧 Desenvolvimento
 
+### Logging
+
+O adaptador `createConsoleLikeLogger` (padrão Adapter sobre o Pino) permite trocar o destino de logs conforme o ambiente. Em
+testes de carga ou cenários de alta concorrência, configure saídas assíncronas usando `pino.destination({ sync: false })` ou um
+`pino.transport(...)` dedicado para evitar bloqueios do event loop ao processar grandes volumes de mensagens.
+
 ### Adicionando novo fluxo
 
 1. Crie o arquivo em `src/flows/meu-fluxo.js`
