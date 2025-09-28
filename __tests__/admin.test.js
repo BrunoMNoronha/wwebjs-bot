@@ -65,6 +65,26 @@ function createIncomingMessage(body) {
   return { from: '123@c.us', body };
 }
 
+/**
+ * @template T
+ * @returns {{ promise: Promise<T>; resolve: (value: T | PromiseLike<T>) => void; reject: (reason?: unknown) => void; }}
+ */
+function createDeferred() {
+  /** @type {(value: T | PromiseLike<T>) => void} */
+  let resolve;
+  /** @type {(reason?: unknown) => void} */
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = /** @type {(value: T | PromiseLike<T>) => void} */ (res);
+    reject = /** @type {(reason?: unknown) => void} */ (rej);
+  });
+  return {
+    promise,
+    resolve: /** @type {(value: T | PromiseLike<T>) => void} */ (resolve),
+    reject: /** @type {(reason?: unknown) => void} */ (reject),
+  };
+}
+
 describe('Admin commands (!shutdown) with self-testing', () => {
   let app;
   beforeAll(async () => {
@@ -144,5 +164,51 @@ describe('Command registry admin notifications', () => {
     expect(mocks.gracefulRestart).toHaveBeenCalledTimes(1);
     expect(mocks.gracefulShutdown).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalled();
+  });
+
+  test('evita execuções concorrentes de gracefulShutdown', async () => {
+    /** @type {{ promise: Promise<void>; resolve: (value?: void) => void; reject: (reason?: unknown) => void; }} */
+    const deferred = createDeferred();
+    const { registry, mocks } = buildAdminRegistry({
+      gracefulShutdown: jest.fn().mockImplementation(() => deferred.promise),
+    });
+
+    const firstRunPromise = registry.run('!shutdown', createIncomingMessage('!shutdown'), createOwnerContext());
+    await new Promise(resolve => setImmediate(resolve));
+
+    const secondHandled = await registry.run('!shutdown', createIncomingMessage('!shutdown'), createOwnerContext());
+
+    expect(secondHandled).toBe(true);
+    expect(mocks.gracefulShutdown).toHaveBeenCalledTimes(1);
+    expect(mocks.sendSafe).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith('[commandRegistry] Solicitação de desligamento ignorada: já existe uma execução em andamento.');
+
+    deferred.resolve();
+    const firstHandled = await firstRunPromise;
+
+    expect(firstHandled).toBe(true);
+  });
+
+  test('evita execuções concorrentes de gracefulRestart', async () => {
+    /** @type {{ promise: Promise<void>; resolve: (value?: void) => void; reject: (reason?: unknown) => void; }} */
+    const deferred = createDeferred();
+    const { registry, mocks } = buildAdminRegistry({
+      gracefulRestart: jest.fn().mockImplementation(() => deferred.promise),
+    });
+
+    const firstRunPromise = registry.run('!restart', createIncomingMessage('!restart'), createOwnerContext());
+    await new Promise(resolve => setImmediate(resolve));
+
+    const secondHandled = await registry.run('!restart', createIncomingMessage('!restart'), createOwnerContext());
+
+    expect(secondHandled).toBe(true);
+    expect(mocks.gracefulRestart).toHaveBeenCalledTimes(1);
+    expect(mocks.sendSafe).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith('[commandRegistry] Solicitação de reinício ignorada: já existe uma execução em andamento.');
+
+    deferred.resolve();
+    const firstHandled = await firstRunPromise;
+
+    expect(firstHandled).toBe(true);
   });
 });
