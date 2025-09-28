@@ -69,13 +69,19 @@ function buildAdminRegistry(overrides: Partial<CommandRegistryDeps> = {}): {
   const gracefulRestartMock = overrides.gracefulRestart ? (overrides.gracefulRestart as jest.Mock) : jest.fn().mockResolvedValue(undefined);
   const logger: ConsoleLikeLogger = overrides.logger ?? createMockLogger();
 
+  const flowEngineMock = {
+    start: jest.fn().mockResolvedValue({ ok: false }),
+    advance: jest.fn(),
+    cancel: jest.fn(),
+    isActive: jest.fn(),
+    getState: jest.fn(),
+  } as unknown as CommandRegistryDeps['flowEngine'];
+
   const deps: CommandRegistryDeps = {
     sendSafe: sendSafeMock,
     sendFlowPrompt: jest.fn().mockResolvedValue(undefined),
     clearFlowPrompt: jest.fn(),
-    flowEngine: {
-      start: jest.fn().mockResolvedValue({ ok: false }),
-    },
+    flowEngine: flowEngineMock,
     menuFlow: {},
     catalogFlow: {},
     menuFlowEnabled: true,

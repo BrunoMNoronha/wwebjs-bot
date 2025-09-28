@@ -1,4 +1,5 @@
 import type { Message } from 'whatsapp-web.js';
+import { List } from 'whatsapp-web.js';
 import { createApplicationContainer, type ApplicationContainer } from '../src/application/container';
 
 jest.mock('whatsapp-web.js', () => {
@@ -21,7 +22,8 @@ jest.mock('whatsapp-web.js', () => {
   class Client extends FakeEventEmitter {
     public readonly opts: Record<string, unknown>;
     public initialized = false;
-    public lastMessage?: { to: string; content: string };
+    public lastMessage?: { to: string; content: unknown };
+    public sentMessages: Array<{ to: string; content: unknown }> = [];
 
     constructor(opts: Record<string, unknown> = {}) {
       super();
@@ -33,9 +35,11 @@ jest.mock('whatsapp-web.js', () => {
       this.emit('ready');
     }
 
-    async sendMessage(to: string, content: string): Promise<{ to: string; content: string }> {
-      this.lastMessage = { to, content };
-      return this.lastMessage;
+    async sendMessage(to: string, content: unknown): Promise<{ to: string; content: unknown }> {
+      const payload = { to, content };
+      this.sentMessages.push(payload);
+      this.lastMessage = payload;
+      return payload;
     }
 
     async destroy(): Promise<void> {
@@ -43,9 +47,23 @@ jest.mock('whatsapp-web.js', () => {
     }
   }
 
+  class List {
+    public readonly body: unknown;
+    public readonly buttonText: unknown;
+    public readonly sections: unknown;
+    public readonly title?: unknown;
+
+    constructor(body: unknown, buttonText: unknown, sections: unknown, title?: unknown) {
+      this.body = body;
+      this.buttonText = buttonText;
+      this.sections = sections;
+      this.title = title;
+    }
+  }
+
   class LocalAuth {}
 
-  return { Client, LocalAuth };
+  return { Client, LocalAuth, List };
 });
 
 jest.mock('qrcode-terminal', () => ({ generate: jest.fn() }));
@@ -67,16 +85,25 @@ function makeMessage({ from = '123@c.us', body = '', fromMe = false }: MessageFa
 describe('Fluxos de menu (texto via FlowEngine)', () => {
   let container: ApplicationContainer;
 
+  const flushDelays = async (): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+
   beforeAll(async () => {
     jest.resetModules();
     process.env.MENU_FLOW = '1';
-    container = createApplicationContainer();
+    container = createApplicationContainer({ responseDelay: { baseDelayMs: 1, factor: 1.01 } });
     await container.start();
   });
 
   beforeEach(() => {
-    const client = container.client as unknown as { lastMessage?: { to: string; content: string } };
+    const client = container.client as unknown as {
+      lastMessage?: { to: string; content: unknown };
+      sentMessages: Array<{ to: string; content: unknown }>;
+    };
     client.lastMessage = undefined;
+    client.sentMessages = [];
   });
 
   afterAll(async () => {
@@ -86,36 +113,52 @@ describe('Fluxos de menu (texto via FlowEngine)', () => {
   test('!menu inicia o fluxo e envia prompt com opções', async () => {
     const msg = makeMessage({ body: '!menu' });
     (container.client as unknown as { emit: (event: string, message: Message) => void }).emit('message', msg);
-    await new Promise((resolve) => setImmediate(resolve));
-    const lastMessage = (container.client as unknown as { lastMessage?: { content: string } }).lastMessage;
-    expect(typeof lastMessage?.content).toBe('string');
-    expect(lastMessage?.content).toMatch(/Como podemos te ajudar hoje\?/i);
-    expect(lastMessage?.content).toMatch(/1\.[\s\S]*Solicitar orçamento/i);
+    await flushDelays();
+    await flushDelays();
+    const client = container.client as unknown as {
+      sentMessages: Array<{ content: unknown }>;
+    };
+    expect(client.sentMessages.length).toBeGreaterThanOrEqual(1);
+    const hasWelcomeText = client.sentMessages.some((message) =>
+      typeof message.content === 'string' && /Como podemos te ajudar hoje\?/i.test(String(message.content)),
+    );
+    expect(hasWelcomeText).toBe(true);
+    const hasMenuTemplate = client.sentMessages.some((message) => message.content instanceof List);
+    expect(hasMenuTemplate).toBe(true);
   });
 
   test('!lista também inicia o fluxo de menu', async () => {
     const msg = makeMessage({ body: '!lista' });
     (container.client as unknown as { emit: (event: string, message: Message) => void }).emit('message', msg);
-    await new Promise((resolve) => setImmediate(resolve));
-    const lastMessage = (container.client as unknown as { lastMessage?: { content: string } }).lastMessage;
-    expect(typeof lastMessage?.content).toBe('string');
-    expect(lastMessage?.content).toMatch(/Como podemos te ajudar hoje\?/i);
+    await flushDelays();
+    await flushDelays();
+    const client = container.client as unknown as {
+      sentMessages: Array<{ content: unknown }>;
+    };
+    expect(client.sentMessages.length).toBeGreaterThanOrEqual(1);
+    const hasWelcomeText = client.sentMessages.some((message) =>
+      typeof message.content === 'string' && /Como podemos te ajudar hoje\?/i.test(String(message.content)),
+    );
+    expect(hasWelcomeText).toBe(true);
+    const hasMenuTemplate = client.sentMessages.some((message) => message.content instanceof List);
+    expect(hasMenuTemplate).toBe(true);
   });
 
   test('responder 1 após !menu encerra com instruções de orçamento', async () => {
     (container.client as unknown as { emit: (event: string, message: Message) => void }).emit('message', makeMessage({ body: '!menu' }));
-    await new Promise((resolve) => setImmediate(resolve));
+    await flushDelays();
+    await flushDelays();
     (container.client as unknown as { emit: (event: string, message: Message) => void }).emit('message', makeMessage({ body: '1' }));
-    await new Promise((resolve) => setImmediate(resolve));
-    const lastMessage = (container.client as unknown as { lastMessage?: { content: string } }).lastMessage;
-    expect(String(lastMessage?.content)).toMatch(/envi(e|ar) uma foto/i);
+    await flushDelays();
+    const client = container.client as unknown as { lastMessage?: { content: unknown } };
+    expect(String(client.lastMessage?.content)).toMatch(/envi(e|ar) uma foto/i);
   });
 
   test('ignora mensagens enviadas por mim (fromMe)', async () => {
     const msg = makeMessage({ body: '!menu', fromMe: true });
     (container.client as unknown as { emit: (event: string, message: Message) => void }).emit('message', msg);
-    await new Promise((resolve) => setImmediate(resolve));
-    const lastMessage = (container.client as unknown as { lastMessage?: { content: string } }).lastMessage;
+    await flushDelays();
+    const lastMessage = (container.client as unknown as { lastMessage?: { content: unknown } }).lastMessage;
     expect(lastMessage).toBeUndefined();
   });
 });

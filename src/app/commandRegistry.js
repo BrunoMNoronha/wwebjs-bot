@@ -17,9 +17,7 @@ const { createConsoleLikeLogger } = require('../infrastructure/logging/createCon
  */
 
 /**
- * @typedef {Object} FlowPromptNode
- * @property {string} [prompt]
- * @property {Array<{ text: string }>} [options]
+ * @typedef {import('../application/flows/FlowSessionService').FlowNode} FlowPromptNode
  */
 
 /**
@@ -28,10 +26,10 @@ const { createConsoleLikeLogger } = require('../infrastructure/logging/createCon
 
 /**
  * @typedef {Object} CommandRegistryDeps
- * @property {(chatId: string, content: string) => Promise<unknown>} sendSafe
+ * @property {(chatId: string, content: import('whatsapp-web.js').MessageContent) => Promise<unknown>} sendSafe
  * @property {(chatId: string, node: FlowPromptNode | undefined, flowKey: string) => Promise<void>} sendFlowPrompt
  * @property {(chatId: string) => void} clearFlowPrompt
- * @property {{ start: (chatId: string, flow: any) => Promise<{ ok: boolean, node?: FlowPromptNode }>; }} flowEngine
+ * @property {import('../flow-runtime/engine').FlowEngine} flowEngine
  * @property {any} menuFlow
  * @property {any} catalogFlow
  * @property {boolean} menuFlowEnabled

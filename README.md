@@ -67,12 +67,12 @@ npm start
 ```
 src/
 ├── config/
-│   └── messages.js          # Textos e prompts da UI
+│   └── messages.ts          # Textos e prompts da UI
 ├── flow-runtime/
-│   └── engine.js           # Engine de fluxos conversacionais
+│   └── engine.ts           # Engine de fluxos conversacionais
 ├── flows/
-│   ├── catalog.js          # Fluxo de catálogo
-│   └── menu.js             # Fluxo de menu baseado em texto
+│   ├── catalog.ts          # Fluxo de catálogo
+│   └── menu.ts             # Fluxo de menu baseado em texto
 ├── rate-control/
 │   └── controller.js       # Controle de taxa de mensagens
 ├── store/
@@ -191,8 +191,8 @@ testes de carga ou cenários de alta concorrência, configure saídas assíncron
 
 ### Modificando comportamento
 
-- **Textos/Prompts**: `src/config/messages.js`
-- **Lógica de fluxos**: `src/flow-runtime/engine.js`
+- **Textos/Prompts**: `src/config/messages.ts`
+- **Lógica de fluxos**: `src/flow-runtime/engine.ts`
 - **Rate limiting**: `src/rate-control/controller.js`
 - **Handler principal**: `main.js`
 

@@ -11,7 +11,8 @@ export interface MessageRouterDeps {
   readonly commandRegistry: CommandRegistry;
   readonly flowEngine: FlowEngine;
   readonly flowSessionService: FlowSessionService;
-  readonly sendSafe: (chatId: string, content: string) => Promise<unknown>;
+  readonly sendSafe: (chatId: string, content: import('whatsapp-web.js').MessageContent) => Promise<unknown>;
+  readonly resetDelay: (chatId: string) => void;
   readonly flowUnavailableText: string;
   readonly expiredFlowText: string;
   readonly invalidOptionText: string;
@@ -82,6 +83,7 @@ class FlowMessageHandler extends BaseMessageHandler {
       input: context.normalizedBody,
       flowEngine: context.flowEngine,
       sendSafe: context.sendSafe,
+      resetDelay: context.resetDelay,
       texts: {
         expiredFlowText: context.expiredFlowText,
         flowUnavailableText: context.flowUnavailableText,
