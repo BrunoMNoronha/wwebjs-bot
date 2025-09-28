@@ -251,6 +251,7 @@ export function createApplicationContainer(options: ApplicationContainerOptions 
           expiredFlowText: config.expiredFlowText,
           invalidOptionText: config.invalidOptionText,
           genericFlowErrorText: config.genericFlowErrorText,
+          conversationRecovery,
         };
 
         const messageRouter = new MessageRouter(messageRouterDeps);
