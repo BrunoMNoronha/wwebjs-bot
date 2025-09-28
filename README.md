@@ -22,7 +22,7 @@ Um bot para WhatsApp construído com Node.js usando a biblioteca `whatsapp-web.j
 
 1. Clone o repositório:
 ```bash
-git clone <url-do-repositorio>
+git clone https://github.com/BrunoMNoronha/wwebjs-bot
 cd wwebjs-bot
 ```
 
