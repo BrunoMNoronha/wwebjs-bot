@@ -15,6 +15,7 @@
     "validate:answers": "npm run test:answers",
     "test:flows": "jest --runInBand -t \"(flow|fluxo|flows|opções)\"",
     "validate:flows": "npm run test:flows",
+    "test:coverage": "jest --runInBand --coverage",
     "test:ci": "jest --runInBand --coverage",
     "validate": "npm run lint && npm run validate:answers && npm run validate:flows"
   },
