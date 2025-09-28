@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import type { Message } from 'whatsapp-web.js';
 import { createApplicationContainer, type ApplicationContainer } from '../src/application/container';
 import { createCommandRegistry } from '../src/app/commandRegistry';
+import type { ConsoleLikeLogger } from '../src/infrastructure/logging/createConsoleLikeLogger';
 
 jest.mock('whatsapp-web.js', () => {
   class Client extends EventEmitter {
@@ -36,6 +37,24 @@ const MY_ID = '5561985307168@c.us';
 type CommandRegistryDeps = Parameters<typeof createCommandRegistry>[0];
 type CommandRegistry = ReturnType<typeof createCommandRegistry>;
 
+type ConsoleLikeLoggerMock = ConsoleLikeLogger & {
+  log: jest.Mock;
+  info: jest.Mock;
+  warn: jest.Mock;
+  error: jest.Mock;
+  debug?: jest.Mock;
+};
+
+function createMockLogger(): ConsoleLikeLoggerMock {
+  return {
+    log: jest.fn(),
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  };
+}
+
 function buildAdminRegistry(overrides: Partial<CommandRegistryDeps> = {}): {
   registry: CommandRegistry;
   mocks: {
@@ -43,10 +62,12 @@ function buildAdminRegistry(overrides: Partial<CommandRegistryDeps> = {}): {
     gracefulShutdown: jest.Mock;
     gracefulRestart: jest.Mock;
   };
+  logger: ConsoleLikeLogger;
 } {
   const sendSafeMock = overrides.sendSafe ? (overrides.sendSafe as jest.Mock) : jest.fn().mockResolvedValue(undefined);
   const gracefulShutdownMock = overrides.gracefulShutdown ? (overrides.gracefulShutdown as jest.Mock) : jest.fn().mockResolvedValue(undefined);
   const gracefulRestartMock = overrides.gracefulRestart ? (overrides.gracefulRestart as jest.Mock) : jest.fn().mockResolvedValue(undefined);
+  const logger: ConsoleLikeLogger = overrides.logger ?? createMockLogger();
 
   const deps: CommandRegistryDeps = {
     sendSafe: sendSafeMock,
@@ -66,9 +87,14 @@ function buildAdminRegistry(overrides: Partial<CommandRegistryDeps> = {}): {
     restartNotice: 'restart',
     shouldExitOnShutdown: false,
     ...overrides,
+    logger,
   };
 
-  return { registry: createCommandRegistry(deps), mocks: { sendSafe: sendSafeMock, gracefulShutdown: gracefulShutdownMock, gracefulRestart: gracefulRestartMock } };
+  return {
+    registry: createCommandRegistry(deps),
+    mocks: { sendSafe: sendSafeMock, gracefulShutdown: gracefulShutdownMock, gracefulRestart: gracefulRestartMock },
+    logger,
+  };
 }
 
 function createOwnerContext(overrides: Partial<{ isOwner: boolean; fromSelf: boolean }> = {}): { isOwner: boolean; fromSelf: boolean } {
@@ -121,19 +147,10 @@ describe('Admin commands (!shutdown) with self-testing', () => {
 });
 
 describe('Command registry admin notifications', () => {
-  let warnSpy: jest.SpyInstance;
-
-  beforeEach(() => {
-    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    warnSpy.mockRestore();
-  });
-
   test('gracefulShutdown executa mesmo que o aviso falhe', async () => {
     const failure = new Error('network down');
-    const { registry, mocks } = buildAdminRegistry({ sendSafe: jest.fn().mockRejectedValue(failure) });
+    const logger = createMockLogger();
+    const { registry, mocks } = buildAdminRegistry({ sendSafe: jest.fn().mockRejectedValue(failure), logger });
 
     const handled = await registry.run('!shutdown', createIncomingMessage('!shutdown') as unknown as Message, createOwnerContext());
 
@@ -141,12 +158,13 @@ describe('Command registry admin notifications', () => {
     expect(mocks.sendSafe).toHaveBeenCalledWith('123@c.us', 'shutdown');
     expect(mocks.gracefulShutdown).toHaveBeenCalledWith({ exit: false });
     expect(mocks.gracefulRestart).not.toHaveBeenCalled();
-    expect(warnSpy).toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalled();
   });
 
   test('gracefulRestart executa mesmo que o aviso falhe', async () => {
     const failure = new Error('offline');
-    const { registry, mocks } = buildAdminRegistry({ sendSafe: jest.fn().mockRejectedValue(failure) });
+    const logger = createMockLogger();
+    const { registry, mocks } = buildAdminRegistry({ sendSafe: jest.fn().mockRejectedValue(failure), logger });
 
     const handled = await registry.run('!restart', createIncomingMessage('!restart') as unknown as Message, createOwnerContext());
 
@@ -154,6 +172,6 @@ describe('Command registry admin notifications', () => {
     expect(mocks.sendSafe).toHaveBeenCalledWith('123@c.us', 'restart');
     expect(mocks.gracefulRestart).toHaveBeenCalled();
     expect(mocks.gracefulShutdown).not.toHaveBeenCalled();
-    expect(warnSpy).toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalled();
   });
 });

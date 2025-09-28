@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import qrcodeTerminal from 'qrcode-terminal';
+import { createConsoleLikeLogger, type ConsoleLikeLogger } from '../logging/createConsoleLikeLogger';
 
 export interface QrCodeStrategy {
   notify(qr: string): Promise<void> | void;
@@ -8,12 +9,12 @@ export interface QrCodeStrategy {
 
 interface TerminalStrategyOptions {
   readonly small: boolean;
-  readonly logger: Pick<Console, 'log' | 'warn'>;
+  readonly logger: Pick<ConsoleLikeLogger, 'log' | 'warn'>;
 }
 
 export class TerminalQrCodeStrategy implements QrCodeStrategy {
   private readonly small: boolean;
-  private readonly logger: Pick<Console, 'log' | 'warn'>;
+  private readonly logger: Pick<ConsoleLikeLogger, 'log' | 'warn'>;
 
   constructor(options: TerminalStrategyOptions) {
     this.small = options.small;
@@ -48,13 +49,13 @@ export class TerminalQrCodeStrategy implements QrCodeStrategy {
 interface FileStrategyOptions {
   readonly filePath: string;
   readonly small: boolean;
-  readonly logger: Pick<Console, 'log' | 'warn'>;
+  readonly logger: Pick<ConsoleLikeLogger, 'log' | 'warn'>;
 }
 
 export class FileQrCodeStrategy implements QrCodeStrategy {
   private readonly filePath: string;
   private readonly small: boolean;
-  private readonly logger: Pick<Console, 'log' | 'warn'>;
+  private readonly logger: Pick<ConsoleLikeLogger, 'log' | 'warn'>;
 
   constructor(options: FileStrategyOptions) {
     this.filePath = options.filePath;
@@ -83,13 +84,13 @@ export class FileQrCodeStrategy implements QrCodeStrategy {
 interface ImageStrategyOptions {
   readonly filePath: string;
   readonly width: number;
-  readonly logger: Pick<Console, 'log' | 'warn'>;
+  readonly logger: Pick<ConsoleLikeLogger, 'log' | 'warn'>;
 }
 
 export class ImageQrCodeStrategy implements QrCodeStrategy {
   private readonly filePath: string;
   private readonly width: number;
-  private readonly logger: Pick<Console, 'log' | 'warn'>;
+  private readonly logger: Pick<ConsoleLikeLogger, 'log' | 'warn'>;
 
   constructor(options: ImageStrategyOptions) {
     this.filePath = options.filePath;
@@ -123,7 +124,7 @@ export interface QrCodeNotifierOptions {
   readonly strategies: readonly QrCodeStrategy[];
   readonly showHints: boolean;
   readonly logUrl: boolean;
-  readonly logger?: Pick<Console, 'log' | 'warn'>;
+  readonly logger?: Pick<ConsoleLikeLogger, 'log' | 'warn'>;
 }
 
 /**
@@ -136,13 +137,13 @@ export class QrCodeNotifier {
   private readonly strategies: readonly QrCodeStrategy[];
   private readonly showHints: boolean;
   private readonly logUrl: boolean;
-  private readonly logger: Pick<Console, 'log' | 'warn'>;
+  private readonly logger: Pick<ConsoleLikeLogger, 'log' | 'warn'>;
 
   constructor(options: QrCodeNotifierOptions) {
     this.strategies = options.strategies;
     this.showHints = options.showHints;
     this.logUrl = options.logUrl;
-    this.logger = options.logger ?? console;
+    this.logger = options.logger ?? createConsoleLikeLogger({ name: 'qr-notifier' });
   }
 
   async notify(qr: string): Promise<void> {
@@ -177,7 +178,10 @@ export interface EnvConfig {
   readonly QR_LOG_URL?: string;
 }
 
-export function createDefaultQrCodeNotifierFromEnv(env: EnvConfig = process.env, logger: Pick<Console, 'log' | 'warn'> = console): QrCodeNotifier {
+export function createDefaultQrCodeNotifierFromEnv(
+  env: EnvConfig = process.env,
+  logger: Pick<ConsoleLikeLogger, 'log' | 'warn'> = createConsoleLikeLogger({ name: 'qr-notifier' }),
+): QrCodeNotifier {
   const strategies: QrCodeStrategy[] = [];
   const showTerminal = env.QR_TERMINAL_ENABLED !== '0';
   const small = env.QR_TERMINAL_SMALL !== '0';
