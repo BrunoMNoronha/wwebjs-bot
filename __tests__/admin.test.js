@@ -30,8 +30,9 @@ describe('Admin commands (!shutdown) with self-testing', () => {
   });
 
   test('!shutdown enviado por mim mesmo executa gracefulShutdown sem loop', async () => {
+    /** @type {{ from: string; fromMe: boolean; body: string }} */
     const msg = { from: MY_ID, fromMe: true, body: '!shutdown' };
-    app.client.emit('message', msg);
+    app.client.emit('message_create', msg);
     await new Promise(r => setImmediate(r));
     expect(app.client.destroyed).toBe(true);
   });
@@ -44,8 +45,9 @@ describe('Admin commands (!shutdown) with self-testing', () => {
 
     expect(app.client.initialized).toBeFalsy(); // em NODE_ENV=test, start não chama initialize
 
+    /** @type {{ from: string; fromMe: boolean; body: string }} */
     const msg = { from: MY_ID, fromMe: true, body: '!restart' };
-    app.client.emit('message', msg);
+    app.client.emit('message_create', msg);
     await new Promise(r => setImmediate(r));
 
     expect(app.client.destroyed).toBe(true);
