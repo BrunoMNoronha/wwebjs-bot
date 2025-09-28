@@ -2,7 +2,7 @@ import { List, type MessageContent } from 'whatsapp-web.js';
 import { createFlowPromptTracker } from '../../app/flowPromptTracker';
 import type { MenuTemplate, FlowTextConfig } from '../../config/messages';
 import {
-  findBestSuggestion,
+  buildOptionMatcher,
   normalizeOption,
   type NormalizedFlowOption,
 } from '../../validation/answers';
@@ -299,12 +299,14 @@ export class FlowSessionService {
     const affirmative = ['sim', 's', 'isso', 'claro'];
     const negative = ['nao', 'não', 'n', 'negativo'];
     if (affirmative.includes(normalizedInput)) {
-      await this.options.conversationRecovery.consumePendingSuggestion(context.chatId);
-      return this.advanceWithInput(context, suggestion.optionId);
+      const resolved = await this.options.conversationRecovery.consumePendingSuggestion(context.chatId);
+      const optionId = resolved?.optionId ?? suggestion.optionId;
+      return this.advanceWithInput(context, optionId);
     }
     if (negative.includes(normalizedInput)) {
-      await this.options.conversationRecovery.consumePendingSuggestion(context.chatId);
-      const status = await this.options.conversationRecovery.recordInvalidAttempt(context.chatId);
+      const status = await this.options.conversationRecovery.recordInvalidAttempt(context.chatId, {
+        skipIfAwaitingConfirmation: true,
+      });
       return this.handleInvalidAttempt(context, status);
     }
     return false;
@@ -381,22 +383,23 @@ export class FlowSessionService {
     options: readonly NormalizedFlowOption[] | undefined,
     sendSafe: FlowSafeSender,
   ): Promise<boolean> {
-    if (!options) {
+    if (!options || options.length === 0) {
       return false;
     }
-    const suggestion = findBestSuggestion(input, options, {
+    const matcher = buildOptionMatcher(options);
+    const match = matcher.matchOption(input, {
       minimumConfidence: this.options.fuzzySuggestionThreshold,
     });
-    if (!suggestion) {
+    if (!match || match.kind !== 'suggestion') {
       return false;
     }
-    if (suggestion.confidence >= this.options.fuzzyConfirmationThreshold) {
+    if (match.confidence >= this.options.fuzzyConfirmationThreshold) {
       await this.options.conversationRecovery.setPendingSuggestion(chatId, {
-        optionId: suggestion.option.id,
-        optionText: suggestion.option.text,
-        confidence: suggestion.confidence,
+        optionId: match.option.id,
+        optionText: match.option.text,
+        confidence: match.confidence,
       });
-      await sendSafe(chatId, this.options.textConfig.suggestion.suggestionPrompt(suggestion.option.text));
+      await sendSafe(chatId, this.options.textConfig.suggestion.suggestionPrompt(match.option.text));
       await sendSafe(chatId, this.options.textConfig.suggestion.confirmHint);
       return true;
     }
