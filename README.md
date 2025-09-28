@@ -189,6 +189,8 @@ Execute com cobertura:
 npm run test:coverage
 ```
 
+> 💡 Para pipelines de integração contínua, utilize `npm run test:ci`, que compartilha a mesma configuração de cobertura e facilita a integração com provedores de CI sem ajustes adicionais.
+
 ### Padrões de teste
 
 - Mocks manuais para `whatsapp-web.js` e `qrcode-terminal`
