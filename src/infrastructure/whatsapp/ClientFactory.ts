@@ -4,6 +4,7 @@ import { Client as WhatsAppClient, LocalAuth, type AuthStrategy } from 'whatsapp
 import { RateController } from '../../flow-runtime/rateController';
 import { FlowEngine } from '../../flow-runtime/engine';
 import { QrCodeNotifier, createDefaultQrCodeNotifierFromEnv } from './QrCodeNotifier';
+import type { ConsoleLikeLogger } from '../logging/createConsoleLikeLogger';
 
 export interface ClientEventHandlers {
   handleIncoming?: (message: import('whatsapp-web.js').Message) => Promise<void> | void;
@@ -45,6 +46,7 @@ export interface WhatsAppClientBuilderOptions {
   readonly authFactory?: (authDir: string) => AuthStrategy;
   readonly clientFactory?: (options: ClientOptions) => Client;
   readonly qrNotifier?: QrCodeNotifier;
+  readonly logger?: ConsoleLikeLogger;
 }
 
 const BASE_PUPPETEER_ARGS: readonly string[] = Object.freeze([
@@ -85,6 +87,7 @@ class DefaultWhatsAppClientBuilder implements WhatsAppClientBuilder {
   private clientFactory: (options: ClientOptions) => Client;
   private qrNotifier: QrCodeNotifier;
   private readonly handlerFactories: Array<(ctx: HandlerFactoryContext) => ClientEventHandlers> = [];
+  private readonly logger: ConsoleLikeLogger;
 
   constructor(options: WhatsAppClientBuilderOptions = {}) {
     this.authDir = options.authDir ?? path.resolve(process.cwd(), '.wwebjs_auth');
@@ -97,7 +100,8 @@ class DefaultWhatsAppClientBuilder implements WhatsAppClientBuilder {
     this.puppeteer = options.puppeteer ?? createPuppeteerOptions();
     this.authFactory = options.authFactory ?? ((dir) => new LocalAuth({ dataPath: dir }));
     this.clientFactory = options.clientFactory ?? ((opts) => new WhatsAppClient(opts));
-    this.qrNotifier = options.qrNotifier ?? createDefaultQrCodeNotifierFromEnv();
+    this.logger = options.logger ?? console;
+    this.qrNotifier = options.qrNotifier ?? createDefaultQrCodeNotifierFromEnv(process.env, this.logger);
   }
 
   withAuthentication(factory: (authDir: string) => AuthStrategy): WhatsAppClientBuilder {
@@ -154,12 +158,14 @@ class DefaultWhatsAppClientBuilder implements WhatsAppClientBuilder {
       try {
         this.rate.stop();
       } catch (error) {
-        console.warn('[factory] rate.stop() falhou:', error);
+        const err = error instanceof Error ? error : new Error(String(error));
+        this.logger.warn('[factory] rate.stop() falhou:', err);
       }
       try {
         await client.destroy();
       } catch (error) {
-        console.warn('[factory] client.destroy() falhou:', error);
+        const err = error instanceof Error ? error : new Error(String(error));
+        this.logger.warn('[factory] client.destroy() falhou:', err);
       }
     };
 
@@ -194,11 +200,11 @@ class DefaultWhatsAppClientBuilder implements WhatsAppClientBuilder {
     }
 
     if (!merged.onReady) {
-      merged.onReady = () => console.log('✅ Cliente pronto e conectado!');
+      merged.onReady = () => this.logger.log('✅ Cliente pronto e conectado!');
     }
 
     if (!merged.onAuthFail) {
-      merged.onAuthFail = (message: string) => console.error('❌ Falha na autenticação', message);
+      merged.onAuthFail = (message: string) => this.logger.error('❌ Falha na autenticação', message);
     }
 
     return merged;
@@ -227,12 +233,12 @@ class DefaultWhatsAppClientBuilder implements WhatsAppClientBuilder {
           await handlers.handleIncoming?.(msg);
         } catch (error) {
           const err = error instanceof Error ? error : new Error(String(error));
-          console.warn('[handleIncoming] erro:', err.message);
+          this.logger.warn('[handleIncoming] erro:', err);
         }
       });
       client.on('message_create', (msg: import('whatsapp-web.js').Message) => {
         try {
-          console.log('[evt:message_create]', {
+          this.logger.info('[evt:message_create]', {
             from: msg?.from,
             to: msg?.to,
             fromMe: Boolean(msg?.fromMe),
@@ -241,13 +247,14 @@ class DefaultWhatsAppClientBuilder implements WhatsAppClientBuilder {
             bodyPreview: String(msg?.body ?? '').slice(0, 60),
           });
         } catch (error) {
-          console.warn('[evt:message_create] log falhou:', error);
+          const err = error instanceof Error ? error : new Error(String(error));
+          this.logger.warn('[evt:message_create] log falhou:', err);
         }
       });
     }
-    client.on('authenticated', () => console.log('[client] authenticated'));
-    client.on('loading_screen', (p: number, ms: number) => console.log('[client] loading_screen:', p, ms));
-    client.on('change_state', (state: string) => console.log('[client] state:', state));
+    client.on('authenticated', () => this.logger.log('[client] authenticated'));
+    client.on('loading_screen', (p: number, ms: number) => this.logger.debug?.('[client] loading_screen:', p, ms));
+    client.on('change_state', (state: string) => this.logger.log('[client] state:', state));
   }
 }
 
