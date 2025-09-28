@@ -3,6 +3,7 @@ import { FlowEngine } from '../src/flow-runtime/engine';
 import { createStore } from '../src/flow-runtime/stateStore';
 import {
   FlowSessionService,
+  type FlowAdvanceContext,
   type FlowAdvanceTexts,
   type FlowDefinition,
   type FlowModuleRegistry,
@@ -36,10 +37,10 @@ const catalogFlow: FlowDefinition = {
   },
 };
 
-const flowModules: FlowModuleRegistry = {
+const flowModules = {
   menu: { flow: menuFlow },
   catalog: { flow: catalogFlow },
-};
+} satisfies FlowModuleRegistry;
 
 const texts: FlowAdvanceTexts = {
   expiredFlowText: 'Sua sessão anterior foi encerrada.',
@@ -73,7 +74,7 @@ describe('FlowSessionService conversational behaviour', () => {
     resetDelay = jest.fn<void, [string]>();
   });
 
-  const buildContext = (input: string) => ({
+  const buildContext = (input: string): FlowAdvanceContext => ({
     chatId,
     input,
     flowEngine: engine,
