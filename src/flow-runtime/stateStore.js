@@ -1,4 +1,8 @@
-'use strict';
+"use strict";
+
+/**
+ * @typedef {import('../infrastructure/logging/createConsoleLikeLogger').ConsoleLikeLogger} ConsoleLikeLogger
+ */
 
 // Armazena estado do fluxo por chatId -> { flow, current }
 // Backend pluggable: memória (default) ou Redis (via REDIS_URL/REDIS_HOST/PORT)
@@ -58,7 +62,10 @@ class RedisStore {
   async has(chatId) { return Boolean(await this.redis.exists(this.key(chatId))); }
 }
 
-function createRedisClientFromEnv() {
+/**
+ * @param {ConsoleLikeLogger} [logger=console]
+ */
+function createRedisClientFromEnv(logger = console) {
   const isTest = process.env.NODE_ENV === 'test';
   const hasUrl = !!process.env.REDIS_URL;
   const hasHost = !!process.env.REDIS_HOST;
@@ -69,7 +76,7 @@ function createRedisClientFromEnv() {
     // require dinâmico para não quebrar quando não instalado
     Redis = require('ioredis');
   } catch (e) {
-    console.warn('[flow-store] ioredis não instalado; usando MemoryStore.');
+    logger.warn('[flow-store] ioredis não instalado; usando MemoryStore.');
     return null;
   }
   try {
@@ -80,10 +87,10 @@ function createRedisClientFromEnv() {
           port: Number(process.env.REDIS_PORT || 6379),
           password: process.env.REDIS_PASSWORD || undefined,
         });
-    client.on('error', err => console.warn('[flow-store] Redis error:', err?.message || err));
+    client.on('error', err => logger.warn('[flow-store] Redis error:', err?.message || err));
     return client;
   } catch (e) {
-    console.warn('[flow-store] Falha ao criar cliente Redis; usando MemoryStore.');
+    logger.warn('[flow-store] Falha ao criar cliente Redis; usando MemoryStore.');
     return null;
   }
 }
@@ -98,9 +105,10 @@ function createRedisClientFromEnv() {
  *  3) Auto-detecção (Redis via env; caso contrário, memória)
  *
  * @param {{ driver?: 'memory' | 'redis', redisClient?: any }} [options]
+ * @param {ConsoleLikeLogger} [logger=console]
  * @returns {MemoryStore | RedisStore}
  */
-function createStore(options = {}) {
+function createStore(options = {}, logger = console) {
   const pref = (options.driver || process.env.FLOW_STORE || '').toLowerCase().trim();
 
   if (pref === 'memory') {
@@ -108,14 +116,14 @@ function createStore(options = {}) {
   }
 
   if (pref === 'redis') {
-    const client = options.redisClient || createRedisClientFromEnv();
+    const client = options.redisClient || createRedisClientFromEnv(logger);
     if (client) return new RedisStore(client);
-    console.warn('[flow-store] Driver "redis" solicitado porém indisponível; usando MemoryStore.');
+    logger.warn('[flow-store] Driver "redis" solicitado porém indisponível; usando MemoryStore.');
     return new MemoryStore();
   }
 
   // Auto-detecção padrão
-  const client = createRedisClientFromEnv();
+  const client = createRedisClientFromEnv(logger);
   if (client) return new RedisStore(client);
   return new MemoryStore();
 }

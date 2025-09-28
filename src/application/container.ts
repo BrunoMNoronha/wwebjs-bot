@@ -18,6 +18,7 @@ import { createWhatsAppClientBuilder, type WhatsAppClientApp } from '../infrastr
 import { createDefaultQrCodeNotifierFromEnv } from '../infrastructure/whatsapp/QrCodeNotifier';
 import { LifecycleManager, type AuthRemovalConfig, type ReconnectConfig } from '../infrastructure/whatsapp/LifecycleManager';
 import { createConsoleLikeLogger, type ConsoleLikeLogger } from '../infrastructure/logging/createConsoleLikeLogger';
+import { createStore } from '../flow-runtime/stateStore';
 
 interface RateLimitsConfig {
   readonly perChatCooldownMs: number;
@@ -129,6 +130,8 @@ export interface ApplicationContainer {
   stop(): Promise<void>;
 }
 
+type FlowStateStore = ConstructorParameters<typeof FlowEngine>[0];
+
 export function createApplicationContainer(options: ApplicationContainerOptions = {}): ApplicationContainer {
   const config = createConfig(options);
   const logger: ConsoleLikeLogger = options.logger ?? createConsoleLikeLogger({ name: 'wwebjs-bot' });
@@ -143,7 +146,8 @@ export function createApplicationContainer(options: ApplicationContainerOptions 
   const menuFlow = flowSessionService.getFlowDefinition('menu');
   const catalogFlow = flowSessionService.getFlowDefinition('catalog');
 
-  const flowEngine = new FlowEngine();
+  const flowStore: FlowStateStore = createStore({}, logger) as FlowStateStore;
+  const flowEngine = new FlowEngine(flowStore);
   const rate = new RateController({
     perChatCooldownMs: config.rateLimits.perChatCooldownMs,
     globalMaxPerInterval: config.rateLimits.globalMaxPerInterval,
@@ -210,6 +214,7 @@ export function createApplicationContainer(options: ApplicationContainerOptions 
           shutdownNotice: config.shutdownNotice,
           restartNotice: config.restartNotice,
           shouldExitOnShutdown: config.shouldExitOnShutdown,
+          logger,
         });
 
         const messageRouterDeps: MessageRouterDeps = {
