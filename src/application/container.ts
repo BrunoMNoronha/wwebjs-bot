@@ -1,7 +1,5 @@
 import path from 'node:path';
-import fs from 'node:fs/promises';
 import type { Client } from 'whatsapp-web.js';
-import { createApp } from '../app/appFactory';
 import { createCommandRegistry } from '../app/commandRegistry';
 import { FlowEngine } from '../flow-runtime/engine';
 import { RateController } from '../flow-runtime/rateController';
@@ -11,6 +9,9 @@ import { FlowSessionService, type FlowDefinition, type FlowKey } from './service
 import flows from '../flows';
 import { TEXT } from '../config/messages';
 import { DEFAULT_FLOW_PROMPT_WINDOW_MS } from '../app/flowPromptTracker';
+import { createWhatsAppClientBuilder, type WhatsAppClientApp } from '../infrastructure/whatsapp/ClientFactory';
+import { createDefaultQrCodeNotifierFromEnv } from '../infrastructure/whatsapp/QrCodeNotifier';
+import { LifecycleManager, type AuthRemovalConfig, type ReconnectConfig } from '../infrastructure/whatsapp/LifecycleManager';
 
 interface FlowModule<T> {
   readonly flow: T;
@@ -27,18 +28,6 @@ interface RateLimitsConfig {
   readonly perChatCooldownMs: number;
   readonly globalMaxPerInterval: number;
   readonly globalIntervalMs: number;
-}
-
-interface AuthRemovalConfig {
-  readonly retries: number;
-  readonly baseDelay: number;
-  readonly maxDelay: number;
-}
-
-interface ReconnectConfig {
-  readonly maxBackoffMs: number;
-  readonly baseBackoffMs: number;
-  readonly factor: number;
 }
 
 interface ApplicationContainerConfig {
@@ -79,67 +68,6 @@ interface ApplicationContainerOverrides {
 }
 
 export interface ApplicationContainerOptions extends ApplicationContainerOverrides {}
-
-interface AppInstance {
-  readonly client: Client;
-  readonly rate: RateController;
-  readonly flowEngine: FlowEngine;
-  start(): Promise<unknown>;
-  stop(): Promise<void>;
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function removeAuthDirWithRetry(dir: string, config: AuthRemovalConfig): Promise<boolean> {
-  for (let attempt = 1; attempt <= config.retries; attempt += 1) {
-    try {
-      await fs.rm(dir, { recursive: true, force: true });
-      return true;
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      const code = err?.code ?? '';
-      const retriable = code === 'EBUSY' || code === 'EPERM' || code === 'ENOENT';
-      if (!retriable || attempt === config.retries) {
-        console.error(`[auth-dir] falha ao remover (${code}) após ${attempt} tentativas:`, err?.message ?? err);
-        return false;
-      }
-      const delay = Math.min(
-        config.maxDelay,
-        Math.floor(config.baseDelay * Math.pow(1.7, attempt - 1)),
-      );
-      await sleep(delay);
-    }
-  }
-  return false;
-}
-
-async function safeReauth(
-  client: Client,
-  authDir: string,
-  authRemoval: AuthRemovalConfig,
-): Promise<void> {
-  console.log('[reauth] iniciando safeReauth');
-  try {
-    await client.destroy();
-    console.log('[reauth] cliente destruído');
-  } catch (error) {
-    const err = error as Error;
-    console.warn('[reauth] erro ao destruir cliente:', err?.message ?? error);
-  }
-  const removed = await removeAuthDirWithRetry(authDir, authRemoval);
-  if (!removed) {
-    console.warn('[reauth] não foi possível remover a pasta de sessão; tentando reinit mesmo assim.');
-  }
-  try {
-    await client.initialize();
-    console.log('✅ Reinicializado. Aguarde QR Code se necessário.');
-  } catch (error) {
-    const err = error as Error;
-    console.error('[reauth] falha ao inicializar cliente:', err?.message ?? error);
-  }
-}
 
 function createConfig(overrides: ApplicationContainerOverrides): ApplicationContainerConfig {
   const authDir = overrides.authDir ?? path.resolve(process.cwd(), process.env.WWEBJS_AUTH_DIR ?? '.wwebjs_auth');
@@ -193,8 +121,8 @@ function createConfig(overrides: ApplicationContainerOverrides): ApplicationCont
 }
 
 interface ApplicationContainerState {
-  app: AppInstance | null;
-  reconnectAttempts: number;
+  app: WhatsAppClientApp | null;
+  lifecycle: LifecycleManager | null;
 }
 
 export interface ApplicationContainer {
@@ -227,19 +155,24 @@ export function createApplicationContainer(options: ApplicationContainerOptions 
 
   const state: ApplicationContainerState = {
     app: null,
-    reconnectAttempts: 0,
+    lifecycle: null,
   };
 
-  function getApp(): AppInstance {
+  function getApp(): WhatsAppClientApp {
     if (state.app) {
       return state.app;
     }
 
-    const appInstance = createApp({
+    const lifecycleRef: { current: LifecycleManager | null } = { current: null };
+
+    const builder = createWhatsAppClientBuilder({
       authDir: config.authDir,
       flowEngine,
       rate,
-      buildHandlers: ({ client }) => {
+      qrNotifier: createDefaultQrCodeNotifierFromEnv(),
+    });
+
+    builder.withHandlers(({ client }) => {
         const sendSafe = async (chatId: string, content: string): Promise<unknown> => {
           return rate.withSend(chatId, () => client.sendMessage(chatId, content));
         };
@@ -255,17 +188,21 @@ export function createApplicationContainer(options: ApplicationContainerOptions 
           menuFlow,
           catalogFlow,
           gracefulShutdown: async ({ exit = config.shouldExitOnShutdown } = {}) => {
-            try { rate.stop(); } catch (error) { console.warn('[shutdown] rate.stop():', error); }
-            try { await client.destroy(); } catch (error) { console.warn('[shutdown] client.destroy():', error); }
+            const lifecycle = lifecycleRef.current;
+            if (!lifecycle) {
+              throw new Error('LifecycleManager não inicializado');
+            }
+            await lifecycle.stop();
             if (exit && process.env.NODE_ENV !== 'test') {
               process.exit(0);
             }
           },
           gracefulRestart: async () => {
-            try { rate.stop(); } catch (error) { console.warn('[restart] rate.stop():', error); }
-            try { await client.destroy(); } catch (error) { console.warn('[restart] client.destroy():', error); }
-            rate.start();
-            try { await client.initialize(); } catch (error) { console.error('[restart] initialize:', error); }
+            const lifecycle = lifecycleRef.current;
+            if (!lifecycle) {
+              throw new Error('LifecycleManager não inicializado');
+            }
+            await lifecycle.restart();
           },
           welcomeText: TEXT.welcome,
           flowUnavailableText: config.flowUnavailableText,
@@ -328,27 +265,21 @@ export function createApplicationContainer(options: ApplicationContainerOptions 
           });
         };
 
-        const onDisconnected = async (reason: string): Promise<void> => {
-          console.log('⚠️ Cliente foi desconectado', reason);
-          if (String(reason).toUpperCase() === 'LOGOUT') {
-            await safeReauth(client, config.authDir, config.authRemoval);
-            state.reconnectAttempts = 0;
-            return;
-          }
-          const { baseBackoffMs, factor, maxBackoffMs } = config.reconnect;
-          const delay = Math.min(maxBackoffMs, Math.floor(baseBackoffMs * Math.pow(factor, state.reconnectAttempts)));
-          state.reconnectAttempts += 1;
-          console.log('[boot] onDisconnected: reagendando initialize em', delay, 'ms');
-          setTimeout(() => {
-            client.initialize().catch((error) => console.error('[reconnect] initialize falhou:', error));
-          }, delay);
-        };
+        return { handleIncoming };
+      });
 
-        return { handleIncoming, onDisconnected };
-      },
-    }) as AppInstance;
+    const appInstance = builder.build();
+    const lifecycle = new LifecycleManager({
+      client: appInstance.client,
+      rate,
+      authDir: config.authDir,
+      authRemoval: config.authRemoval,
+      reconnect: config.reconnect,
+    });
+    lifecycleRef.current = lifecycle;
 
     state.app = appInstance;
+    state.lifecycle = lifecycle;
     return appInstance;
   }
 
@@ -363,14 +294,17 @@ export function createApplicationContainer(options: ApplicationContainerOptions 
       return flowEngine;
     },
     async start(): Promise<void> {
-      const app = getApp();
-      await app.start();
+      getApp();
+      if (!state.lifecycle) {
+        throw new Error('LifecycleManager não inicializado');
+      }
+      await state.lifecycle.start();
     },
     async stop(): Promise<void> {
-      if (!state.app) {
+      if (!state.lifecycle) {
         return;
       }
-      await state.app.stop();
+      await state.lifecycle.stop();
     },
   };
 }
