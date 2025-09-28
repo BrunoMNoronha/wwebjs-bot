@@ -19,6 +19,7 @@ export interface ConsoleLikeLogger {
   warn(message?: unknown, ...optionalParams: readonly unknown[]): void;
   error(message?: unknown, ...optionalParams: readonly unknown[]): void;
   debug?(message?: unknown, ...optionalParams: readonly unknown[]): void;
+  isLevelEnabled?(level: Level): boolean;
 }
 
 export interface ConsoleLikeLoggerOptions {
@@ -94,5 +95,8 @@ export function createConsoleLikeLogger(options: ConsoleLikeLoggerOptions = {}):
     warn: bind('warn'),
     error: bind('error'),
     debug: bind('debug'),
+    isLevelEnabled: (targetLevel: Level): boolean => {
+      return typeof logger.isLevelEnabled === 'function' ? logger.isLevelEnabled(targetLevel) : true;
+    },
   };
 }
