@@ -21,6 +21,10 @@
  */
 
 /**
+ * @typedef {import('../infrastructure/logging/createConsoleLikeLogger').ConsoleLikeLogger} ConsoleLikeLogger
+ */
+
+/**
  * @typedef {Object} CommandRegistryDeps
  * @property {(chatId: string, content: string) => Promise<unknown>} sendSafe
  * @property {(chatId: string, node: FlowPromptNode | undefined, flowKey: string) => Promise<void>} sendFlowPrompt
@@ -36,6 +40,7 @@
  * @property {string} shutdownNotice
  * @property {string} restartNotice
  * @property {boolean} shouldExitOnShutdown
+ * @property {ConsoleLikeLogger} logger
  */
 
 /**
@@ -61,6 +66,7 @@ function createCommandRegistry(deps) {
     shutdownNotice,
     restartNotice,
     shouldExitOnShutdown,
+    logger = console,
   } = deps;
 
   /** @type {Map<string, CommandHandler>} */
@@ -83,7 +89,7 @@ function createCommandRegistry(deps) {
     if (!context.isOwner) return false;
 
     if (isShutdownInProgress) {
-      console.warn('[commandRegistry] Solicitação de desligamento ignorada: já existe uma execução em andamento.');
+      logger.warn('[commandRegistry] Solicitação de desligamento ignorada: já existe uma execução em andamento.');
       return true;
     }
 
@@ -95,7 +101,7 @@ function createCommandRegistry(deps) {
           await sendSafe(message.from, shutdownNotice);
         } catch (/** @type {unknown} */ error) {
           const parsedError = error instanceof Error ? error : new Error(String(error));
-          console.warn('[commandRegistry] Falha ao enviar aviso de desligamento:', parsedError);
+          logger.warn('[commandRegistry] Falha ao enviar aviso de desligamento:', parsedError);
         }
       }
 
@@ -111,7 +117,7 @@ function createCommandRegistry(deps) {
     if (!context.isOwner) return false;
 
     if (isRestartInProgress) {
-      console.warn('[commandRegistry] Solicitação de reinício ignorada: já existe uma execução em andamento.');
+      logger.warn('[commandRegistry] Solicitação de reinício ignorada: já existe uma execução em andamento.');
       return true;
     }
 
@@ -123,7 +129,7 @@ function createCommandRegistry(deps) {
           await sendSafe(message.from, restartNotice);
         } catch (/** @type {unknown} */ error) {
           const parsedError = error instanceof Error ? error : new Error(String(error));
-          console.warn('[commandRegistry] Falha ao enviar aviso de reinício:', parsedError);
+          logger.warn('[commandRegistry] Falha ao enviar aviso de reinício:', parsedError);
         }
       }
 
