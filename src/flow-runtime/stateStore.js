@@ -88,11 +88,35 @@ function createRedisClientFromEnv() {
   }
 }
 
-function createStore() {
-  const client = createRedisClientFromEnv();
-  if (client) {
-    return new RedisStore(client);
+/**
+ * Cria a store de estado de fluxo.
+ * Permite escolher explicitamente via env/param o driver desejado.
+ *
+ * Precedência de escolha do driver:
+ *  1) Parâmetro options.driver ("memory" | "redis")
+ *  2) Variável de ambiente FLOW_STORE ("memory" | "redis")
+ *  3) Auto-detecção (Redis via env; caso contrário, memória)
+ *
+ * @param {{ driver?: 'memory' | 'redis', redisClient?: any }} [options]
+ * @returns {MemoryStore | RedisStore}
+ */
+function createStore(options = {}) {
+  const pref = (options.driver || process.env.FLOW_STORE || '').toLowerCase().trim();
+
+  if (pref === 'memory') {
+    return new MemoryStore();
   }
+
+  if (pref === 'redis') {
+    const client = options.redisClient || createRedisClientFromEnv();
+    if (client) return new RedisStore(client);
+    console.warn('[flow-store] Driver "redis" solicitado porém indisponível; usando MemoryStore.');
+    return new MemoryStore();
+  }
+
+  // Auto-detecção padrão
+  const client = createRedisClientFromEnv();
+  if (client) return new RedisStore(client);
   return new MemoryStore();
 }
 
