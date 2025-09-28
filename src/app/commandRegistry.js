@@ -74,19 +74,35 @@ function createCommandRegistry(deps) {
 
   register(['!shutdown'], async (message, context) => {
     if (!context.isOwner) return false;
-    if (!context.fromSelf) {
-      await sendSafe(message.from, shutdownNotice);
+
+    try {
+      if (!context.fromSelf) {
+        await sendSafe(message.from, shutdownNotice);
+      }
+    } catch (/** @type {unknown} */ error) {
+      const parsedError = error instanceof Error ? error : new Error(String(error));
+      console.warn('[commandRegistry] Falha ao enviar aviso de desligamento:', parsedError);
+    } finally {
+      await gracefulShutdown({ exit: shouldExitOnShutdown });
     }
-    await gracefulShutdown({ exit: shouldExitOnShutdown });
+
     return true;
   });
 
   register(['!restart'], async (message, context) => {
     if (!context.isOwner) return false;
-    if (!context.fromSelf) {
-      await sendSafe(message.from, restartNotice);
+
+    try {
+      if (!context.fromSelf) {
+        await sendSafe(message.from, restartNotice);
+      }
+    } catch (/** @type {unknown} */ error) {
+      const parsedError = error instanceof Error ? error : new Error(String(error));
+      console.warn('[commandRegistry] Falha ao enviar aviso de reinício:', parsedError);
+    } finally {
+      await gracefulRestart();
     }
-    await gracefulRestart();
+
     return true;
   });
 
