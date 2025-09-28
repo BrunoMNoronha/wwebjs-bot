@@ -97,7 +97,6 @@ function registerHandlers(client, { handleIncoming, onQR, onReady, onAuthFail, o
   if (onAuthFail) client.on('auth_failure', onAuthFail);
   if (onDisconnected) client.on('disconnected', onDisconnected);
   if (handleIncoming) {
-    client.on('message', handleIncoming);
     client.on('message_create', handleIncoming);
   }
 }

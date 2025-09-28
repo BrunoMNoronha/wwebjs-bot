@@ -28,8 +28,13 @@ describe('Fluxo recente é reiniciado com o mesmo tipo', () => {
   let app;
   const chatId = '5511987654321@c.us';
 
+  /**
+   * @param {string} body
+   * @param {Record<string, unknown>} [extra]
+   * @returns {Promise<void>}
+   */
   const emitMessage = async (body, extra = {}) => {
-    app.client.emit('message', { from: chatId, to: 'bot@c.us', body, fromMe: false, ...extra });
+    app.client.emit('message_create', { from: chatId, to: 'bot@c.us', body, fromMe: false, ...extra });
     await new Promise(r => setImmediate(r));
   };
 
