@@ -79,16 +79,37 @@ interface ApplicationContainerOverrides {
 
 export interface ApplicationContainerOptions extends ApplicationContainerOverrides {}
 
+function normalizeBooleanEnv(value: string | null | undefined): boolean | undefined {
+  if (value == null) {
+    return undefined;
+  }
+
+  const trimmedValue: string = value.trim();
+  if (trimmedValue === '') {
+    return undefined;
+  }
+
+  const lowerCasedValue: string = trimmedValue.toLowerCase();
+  if (lowerCasedValue === '1' || lowerCasedValue === 'true' || lowerCasedValue === 'yes') {
+    return true;
+  }
+
+  if (lowerCasedValue === '0' || lowerCasedValue === 'false' || lowerCasedValue === 'no') {
+    return false;
+  }
+
+  return undefined;
+}
+
 function createConfig(overrides: ApplicationContainerOverrides): ApplicationContainerConfig {
   const authDir = overrides.authDir ?? path.resolve(process.cwd(), process.env.WWEBJS_AUTH_DIR ?? '.wwebjs_auth');
   const ownerId = overrides.ownerId ?? process.env.OWNER_ID ?? '';
   const allowSelfAdmin = overrides.allowSelfAdmin ?? process.env.ALLOW_SELF_ADMIN === '1';
   const menuFlowEnabled = overrides.menuFlowEnabled ?? process.env.MENU_FLOW === '1';
   const flowPromptWindowMs = overrides.flowPromptWindowMs ?? Number(process.env.FLOW_PROMPT_WINDOW_MS ?? DEFAULT_FLOW_PROMPT_WINDOW_MS);
+  const normalizedExitOnShutdown: boolean | undefined = normalizeBooleanEnv(process.env.EXIT_ON_SHUTDOWN);
   const shouldExitOnShutdown = overrides.shouldExitOnShutdown
-    ?? (process.env.EXIT_ON_SHUTDOWN != null
-      ? process.env.EXIT_ON_SHUTDOWN === '1'
-      : process.env.NODE_ENV !== 'test');
+    ?? (normalizedExitOnShutdown ?? (process.env.NODE_ENV !== 'test'));
   const flowUnavailableText = overrides.flowUnavailableText ?? 'Fluxo indisponível no momento.';
   const shutdownNotice = overrides.shutdownNotice ?? 'Encerrando o bot com segurança…';
   const restartNotice = overrides.restartNotice ?? 'Reiniciando o bot…';
