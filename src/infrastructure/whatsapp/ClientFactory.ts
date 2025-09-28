@@ -1,10 +1,11 @@
 import path from 'node:path';
+import type { Level } from 'pino';
 import type { Client, ClientOptions } from 'whatsapp-web.js';
 import { Client as WhatsAppClient, LocalAuth, type AuthStrategy } from 'whatsapp-web.js';
 import { RateController } from '../../flow-runtime/rateController';
 import { FlowEngine } from '../../flow-runtime/engine';
 import { QrCodeNotifier, createDefaultQrCodeNotifierFromEnv } from './QrCodeNotifier';
-import type { ConsoleLikeLogger } from '../logging/createConsoleLikeLogger';
+import { createConsoleLikeLogger, type ConsoleLikeLogger } from '../logging/createConsoleLikeLogger';
 
 export interface ClientEventHandlers {
   handleIncoming?: (message: import('whatsapp-web.js').Message) => Promise<void> | void;
@@ -18,6 +19,7 @@ export interface HandlerFactoryContext {
   readonly client: Client;
   readonly rate: RateController;
   readonly flowEngine: FlowEngine;
+  readonly logger: ConsoleLikeLogger;
 }
 
 export interface WhatsAppClientApp {
@@ -58,6 +60,58 @@ const BASE_PUPPETEER_ARGS: readonly string[] = Object.freeze([
   '--no-zygote',
   '--disable-extensions',
 ]);
+
+type ComparableLogLevel = 'error' | 'warn' | 'info' | 'debug';
+type NormalizedEnvLogLevel = ComparableLogLevel | 'silent';
+
+const LOG_LEVEL_PRIORITY: Readonly<Record<ComparableLogLevel, number>> = Object.freeze({
+  error: 400,
+  warn: 300,
+  info: 200,
+  debug: 100,
+});
+
+const LOG_LEVEL_ALIASES: Readonly<Record<string, NormalizedEnvLogLevel>> = Object.freeze({
+  fatal: 'error',
+  error: 'error',
+  warn: 'warn',
+  warning: 'warn',
+  info: 'info',
+  log: 'info',
+  debug: 'debug',
+  trace: 'debug',
+  verbose: 'debug',
+  silent: 'silent',
+});
+
+const COMPARABLE_TO_PINO_LEVEL: Readonly<Record<ComparableLogLevel, Level>> = Object.freeze({
+  error: 'error',
+  warn: 'warn',
+  info: 'info',
+  debug: 'debug',
+});
+
+function normalizeEnvLogLevel(rawLevel: string | undefined): NormalizedEnvLogLevel {
+  if (typeof rawLevel !== 'string') {
+    return 'info';
+  }
+  const normalized = rawLevel.trim().toLowerCase();
+  return LOG_LEVEL_ALIASES[normalized] ?? 'info';
+}
+
+function isLogLevelEnabled(logger: ConsoleLikeLogger, level: ComparableLogLevel): boolean {
+  if (typeof logger.isLevelEnabled === 'function') {
+    const targetLevel: Level = COMPARABLE_TO_PINO_LEVEL[level];
+    return logger.isLevelEnabled(targetLevel);
+  }
+
+  const envLevel: NormalizedEnvLogLevel = normalizeEnvLogLevel(process.env.LOG_LEVEL);
+  if (envLevel === 'silent') {
+    return false;
+  }
+
+  return LOG_LEVEL_PRIORITY[level] >= LOG_LEVEL_PRIORITY[envLevel];
+}
 
 function createPuppeteerOptions(): ClientOptions['puppeteer'] {
   const args = [...BASE_PUPPETEER_ARGS];
@@ -100,7 +154,7 @@ class DefaultWhatsAppClientBuilder implements WhatsAppClientBuilder {
     this.puppeteer = options.puppeteer ?? createPuppeteerOptions();
     this.authFactory = options.authFactory ?? ((dir) => new LocalAuth({ dataPath: dir }));
     this.clientFactory = options.clientFactory ?? ((opts) => new WhatsAppClient(opts));
-    this.logger = options.logger ?? console;
+    this.logger = options.logger ?? createConsoleLikeLogger({ name: 'wwebjs-client' });
     this.qrNotifier = options.qrNotifier ?? createDefaultQrCodeNotifierFromEnv(process.env, this.logger);
   }
 
@@ -141,10 +195,15 @@ class DefaultWhatsAppClientBuilder implements WhatsAppClientBuilder {
     };
 
     const client = this.clientFactory(clientOptions);
-    const ctx: HandlerFactoryContext = { client, rate: this.rate, flowEngine: this.flowEngine };
+    const ctx: HandlerFactoryContext = {
+      client,
+      rate: this.rate,
+      flowEngine: this.flowEngine,
+      logger: this.logger,
+    };
 
-    const handlers = this.composeHandlers(ctx);
-    this.registerHandlers(client, handlers);
+    const handlers = this.composeHandlers(ctx, this.logger);
+    this.registerHandlers(client, handlers, this.logger);
 
     const start = async (): Promise<HandlerFactoryContext> => {
       this.rate.start();
@@ -172,7 +231,7 @@ class DefaultWhatsAppClientBuilder implements WhatsAppClientBuilder {
     return { client, rate: this.rate, flowEngine: this.flowEngine, start, stop };
   }
 
-  private composeHandlers(ctx: HandlerFactoryContext): ClientEventHandlers {
+  private composeHandlers(ctx: HandlerFactoryContext, logger: ConsoleLikeLogger): ClientEventHandlers {
     const merged: ClientEventHandlers = {};
     for (const factory of this.handlerFactories) {
       const handlers = factory(ctx) ?? {};
@@ -200,17 +259,17 @@ class DefaultWhatsAppClientBuilder implements WhatsAppClientBuilder {
     }
 
     if (!merged.onReady) {
-      merged.onReady = () => this.logger.log('✅ Cliente pronto e conectado!');
+      merged.onReady = () => logger.log('✅ Cliente pronto e conectado!');
     }
 
     if (!merged.onAuthFail) {
-      merged.onAuthFail = (message: string) => this.logger.error('❌ Falha na autenticação', message);
+      merged.onAuthFail = (message: string) => logger.error('❌ Falha na autenticação', message);
     }
 
     return merged;
   }
 
-  private registerHandlers(client: Client, handlers: ClientEventHandlers): void {
+  private registerHandlers(client: Client, handlers: ClientEventHandlers, logger: ConsoleLikeLogger): void {
     if (handlers.onQR) {
       client.on('qr', (qr: string) => {
         void handlers.onQR?.(qr);
@@ -233,28 +292,31 @@ class DefaultWhatsAppClientBuilder implements WhatsAppClientBuilder {
           await handlers.handleIncoming?.(msg);
         } catch (error) {
           const err = error instanceof Error ? error : new Error(String(error));
-          this.logger.warn('[handleIncoming] erro:', err);
+          logger.warn('[handleIncoming] erro:', err);
         }
       });
-      client.on('message_create', (msg: import('whatsapp-web.js').Message) => {
-        try {
-          this.logger.info('[evt:message_create]', {
-            from: msg?.from,
-            to: msg?.to,
-            fromMe: Boolean(msg?.fromMe),
-            type: msg?.type,
-            hasBody: Boolean(msg?.body),
-            bodyPreview: String(msg?.body ?? '').slice(0, 60),
-          });
-        } catch (error) {
-          const err = error instanceof Error ? error : new Error(String(error));
-          this.logger.warn('[evt:message_create] log falhou:', err);
-        }
-      });
+      const shouldLogMessageCreate: boolean = isLogLevelEnabled(logger, 'info');
+      if (shouldLogMessageCreate) {
+        client.on('message_create', (msg: import('whatsapp-web.js').Message) => {
+          try {
+            logger.info('[evt:message_create]', {
+              from: msg?.from,
+              to: msg?.to,
+              fromMe: Boolean(msg?.fromMe),
+              type: msg?.type,
+              hasBody: Boolean(msg?.body),
+              bodyPreview: String(msg?.body ?? '').slice(0, 60),
+            });
+          } catch (error) {
+            const err = error instanceof Error ? error : new Error(String(error));
+            logger.warn('[evt:message_create] log falhou:', err);
+          }
+        });
+      }
     }
-    client.on('authenticated', () => this.logger.log('[client] authenticated'));
-    client.on('loading_screen', (p: number, ms: number) => this.logger.debug?.('[client] loading_screen:', p, ms));
-    client.on('change_state', (state: string) => this.logger.log('[client] state:', state));
+    client.on('authenticated', () => logger.log('[client] authenticated'));
+    client.on('loading_screen', (p: number, ms: number) => logger.debug?.('[client] loading_screen:', p, ms));
+    client.on('change_state', (state: string) => logger.log('[client] state:', state));
   }
 }
 
