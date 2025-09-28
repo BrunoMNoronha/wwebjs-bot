@@ -5,24 +5,18 @@ import { FlowEngine } from '../flow-runtime/engine';
 import { RateController } from '../flow-runtime/rateController';
 import { MessageRouter } from './messaging/MessageRouter';
 import type { MessageRouterDeps } from './messaging/MessageRouter';
-import { FlowSessionService, type FlowDefinition, type FlowKey } from './services/FlowSessionService';
+import {
+  FlowSessionService,
+  type FlowDefinition,
+  type FlowKey,
+  type FlowModuleRegistry,
+} from './flows/FlowSessionService';
 import flows from '../flows';
 import { TEXT } from '../config/messages';
 import { DEFAULT_FLOW_PROMPT_WINDOW_MS } from '../app/flowPromptTracker';
 import { createWhatsAppClientBuilder, type WhatsAppClientApp } from '../infrastructure/whatsapp/ClientFactory';
 import { createDefaultQrCodeNotifierFromEnv } from '../infrastructure/whatsapp/QrCodeNotifier';
 import { LifecycleManager, type AuthRemovalConfig, type ReconnectConfig } from '../infrastructure/whatsapp/LifecycleManager';
-
-interface FlowModule<T> {
-  readonly flow: T;
-}
-
-function resolveFlow<T>(entry: FlowModule<T> | T): T {
-  if (entry && typeof entry === 'object' && 'flow' in entry && entry.flow) {
-    return (entry as FlowModule<T>).flow;
-  }
-  return entry as T;
-}
 
 interface RateLimitsConfig {
   readonly perChatCooldownMs: number;
@@ -136,21 +130,21 @@ export interface ApplicationContainer {
 export function createApplicationContainer(options: ApplicationContainerOptions = {}): ApplicationContainer {
   const config = createConfig(options);
 
-  const resolvedFlows = flows as Record<string, FlowModule<FlowDefinition> | FlowDefinition>;
-  const catalogFlow = options.flows?.catalog ?? resolveFlow<FlowDefinition>(resolvedFlows.catalog);
-  const menuFlow = options.flows?.menu ?? resolveFlow<FlowDefinition>(resolvedFlows.menu);
+  const flowSessionService = new FlowSessionService({
+    flowModules: flows as FlowModuleRegistry,
+    overrides: options.flows,
+    menuFlowEnabled: config.menuFlowEnabled,
+    promptWindowMs: config.flowPromptWindowMs,
+  });
+
+  const menuFlow = flowSessionService.getFlowDefinition('menu');
+  const catalogFlow = flowSessionService.getFlowDefinition('catalog');
 
   const flowEngine = new FlowEngine();
   const rate = new RateController({
     perChatCooldownMs: config.rateLimits.perChatCooldownMs,
     globalMaxPerInterval: config.rateLimits.globalMaxPerInterval,
     globalIntervalMs: config.rateLimits.globalIntervalMs,
-  });
-  const flowSessionService = new FlowSessionService({
-    menuFlow,
-    catalogFlow,
-    menuFlowEnabled: config.menuFlowEnabled,
-    promptWindowMs: config.flowPromptWindowMs,
   });
 
   const state: ApplicationContainerState = {
@@ -187,6 +181,7 @@ export function createApplicationContainer(options: ApplicationContainerOptions 
           flowEngine,
           menuFlow,
           catalogFlow,
+          menuFlowEnabled: config.menuFlowEnabled,
           gracefulShutdown: async ({ exit = config.shouldExitOnShutdown } = {}) => {
             const lifecycle = lifecycleRef.current;
             if (!lifecycle) {

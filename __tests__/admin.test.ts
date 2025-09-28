@@ -57,6 +57,7 @@ function buildAdminRegistry(overrides: Partial<CommandRegistryDeps> = {}): {
     },
     menuFlow: {},
     catalogFlow: {},
+    menuFlowEnabled: true,
     gracefulShutdown: gracefulShutdownMock,
     gracefulRestart: gracefulRestartMock,
     welcomeText: 'welcome',

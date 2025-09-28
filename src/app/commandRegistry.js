@@ -28,6 +28,7 @@
  * @property {{ start: (chatId: string, flow: any) => Promise<{ ok: boolean, node?: FlowPromptNode }>; }} flowEngine
  * @property {any} menuFlow
  * @property {any} catalogFlow
+ * @property {boolean} menuFlowEnabled
  * @property {(options?: { exit?: boolean }) => Promise<void>} gracefulShutdown
  * @property {() => Promise<void>} gracefulRestart
  * @property {string} welcomeText
@@ -52,6 +53,7 @@ function createCommandRegistry(deps) {
     flowEngine,
     menuFlow,
     catalogFlow,
+    menuFlowEnabled,
     gracefulShutdown,
     gracefulRestart,
     welcomeText,
@@ -132,8 +134,6 @@ function createCommandRegistry(deps) {
 
     return true;
   });
-
-  const menuFlowEnabled = process.env.MENU_FLOW === '1';
 
   register(['!menu', '!lista'], async (message, context) => {
     if (context.fromSelf) return false;
