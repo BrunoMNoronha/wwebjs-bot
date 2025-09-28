@@ -1,0 +1,27 @@
+{
+  "name": "wwebjs-bot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "main.js",
+  "scripts": {
+    "start": "node .",
+    "test": "jest --runInBand",
+    "test:watch": "jest --watchAll",
+    "test:answers": "jest --runInBand -t \"(answers|opções|options)\"",
+    "validate:answers": "npm run test:answers",
+    "test:flows": "jest --runInBand -t \"(flow|fluxo|flows|opções)\"",
+    "validate:flows": "npm run test:flows",
+    "test:ci": "jest --runInBand --coverage",
+    "validate": "npm run validate:answers && npm run validate:flows"
+  },
+  "keywords": [],
+  "author": "Bruno M Noronha",
+  "license": "ISC",
+  "dependencies": {
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.34.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}
