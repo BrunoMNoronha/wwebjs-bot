@@ -59,13 +59,15 @@ describe('FlowSessionService conversational behaviour', () => {
   let engine: FlowEngine;
   let sendSafe: jest.Mock<Promise<void>, [string, unknown]>;
   let resetDelay: jest.Mock<void, [string]>;
+  let conversationRecovery: ConversationRecoveryService;
 
   beforeEach(() => {
+    conversationRecovery = new ConversationRecoveryService();
     service = new FlowSessionService({
       flowModules,
       menuFlowEnabled: true,
       promptWindowMs: 60_000,
-      conversationRecovery: new ConversationRecoveryService(),
+      conversationRecovery,
       textConfig: TEXT,
       initialMenuTemplate: INITIAL_MENU_TEMPLATE,
       fallbackMenuTemplate: FALLBACK_MENU_TEMPLATE,
@@ -141,9 +143,16 @@ describe('FlowSessionService conversational behaviour', () => {
     expect(sendSafe).toHaveBeenCalledTimes(2);
     expect(String(sendSafe.mock.calls[0][1])).toContain('Claro!');
     expect(String(sendSafe.mock.calls[1][1])).toContain(TEXT.lockedNotice.split(' ')[0]);
+    expect(resetDelay).toHaveBeenCalledTimes(1);
+
+    const status = await conversationRecovery.getLockStatus(chatId);
+    expect(status.locked).toBe(true);
+    expect(status.lockedUntil).toBeGreaterThan(Date.now());
 
     sendSafe.mockClear();
+    resetDelay.mockClear();
     await service.advanceOrRestart(buildContext('mensagem durante bloqueio'));
-    expect(String(sendSafe.mock.calls[0][1])).toContain(TEXT.invalidWhileLocked.split(' ')[0]);
+    expect(sendSafe).not.toHaveBeenCalled();
+    expect(resetDelay).not.toHaveBeenCalled();
   });
 });

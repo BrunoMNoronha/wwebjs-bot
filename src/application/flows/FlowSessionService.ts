@@ -289,6 +289,15 @@ export class FlowSessionService {
     return undefined;
   }
 
+  private getLockExpiration(): number {
+    return Date.now() + this.options.lockDurationMs;
+  }
+
+  private async enforceLock(chatId: string, sendSafe: FlowSafeSender): Promise<void> {
+    await this.options.conversationRecovery.lock(chatId, this.getLockExpiration());
+    await sendSafe(chatId, this.options.textConfig.lockedNotice);
+  }
+
   private formatPrompt(prompt: FlowPrompt): MessageContent {
     if (prompt.kind === 'text') {
       return prompt.promptContent;
@@ -433,13 +442,8 @@ export class FlowSessionService {
 
   private async finishWithLock(context: FlowAdvanceContext, message: string): Promise<void> {
     await context.sendSafe(context.chatId, message);
-    await this.options.conversationRecovery.lock(
-      context.chatId,
-      Date.now() + this.options.lockDurationMs,
-    );
-    await context.sendSafe(context.chatId, this.options.textConfig.lockedNotice);
+    await this.enforceLock(context.chatId, context.sendSafe);
     this.clearPrompt(context.chatId);
-    context.resetDelay?.(context.chatId);
   }
 
   private async sendInitialMenu(chatId: string, sendSafe: FlowSafeSender): Promise<void> {
@@ -541,20 +545,16 @@ export class FlowSessionService {
     }
 
     if (result.terminal) {
+      const entry = result.nodeId ? this.getNodeEntry(result.nodeId) : undefined;
+      const shouldLock = entry?.node.lockOnComplete === true;
       if (result.prompt) {
         await context.sendSafe(context.chatId, result.prompt);
       }
       await this.options.conversationRecovery.recordValidSelection(context.chatId);
-      context.resetDelay?.(context.chatId);
-      if (result.nodeId) {
-        const entry = this.getNodeEntry(result.nodeId);
-        if (entry?.node.lockOnComplete) {
-          await this.options.conversationRecovery.lock(
-            context.chatId,
-            Date.now() + this.options.lockDurationMs,
-          );
-          await context.sendSafe(context.chatId, this.options.textConfig.lockedNotice);
-        }
+      if (!shouldLock) {
+        context.resetDelay?.(context.chatId);
+      } else {
+        await this.enforceLock(context.chatId, context.sendSafe);
       }
       this.rememberPrompt(context.chatId);
       return true;
@@ -601,7 +601,6 @@ export class FlowSessionService {
 
     const lockStatus = await this.options.conversationRecovery.getLockStatus(context.chatId);
     if (lockStatus.locked) {
-      await context.sendSafe(context.chatId, this.options.textConfig.invalidWhileLocked);
       return true;
     }
 

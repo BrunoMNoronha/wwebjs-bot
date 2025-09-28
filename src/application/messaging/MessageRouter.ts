@@ -2,6 +2,7 @@ import type { Message } from 'whatsapp-web.js';
 import type { FlowEngine } from '../../flow-runtime/engine';
 import type { FlowSessionService } from '../flows/FlowSessionService';
 import type { FlowKey } from '../flows/FlowSessionService';
+import type { ConversationRecoveryService } from './ConversationRecoveryService';
 
 export interface CommandRegistry {
   run(command: string, message: Message, context: { isOwner: boolean; fromSelf: boolean }): Promise<boolean>;
@@ -17,6 +18,7 @@ export interface MessageRouterDeps {
   readonly expiredFlowText: string;
   readonly invalidOptionText: string;
   readonly genericFlowErrorText: string;
+  readonly conversationRecovery: ConversationRecoveryService;
 }
 
 export interface RoutedMessage {
@@ -51,6 +53,23 @@ abstract class BaseMessageHandler implements MessageHandler {
   }
 
   abstract handle(context: MessageProcessingContext): Promise<boolean>;
+}
+
+class LockMessageHandler extends BaseMessageHandler {
+  constructor(private readonly conversationRecovery: ConversationRecoveryService) {
+    super();
+  }
+
+  async handle(context: MessageProcessingContext): Promise<boolean> {
+    if (!context.chatId) {
+      return this.handleNext(context);
+    }
+    const status = await this.conversationRecovery.getLockStatus(context.chatId);
+    if (status.locked) {
+      return true;
+    }
+    return this.handleNext(context);
+  }
 }
 
 class CommandMessageHandler extends BaseMessageHandler {
@@ -124,12 +143,13 @@ export class MessageRouter {
   private readonly head: MessageHandler;
 
   constructor(private readonly deps: MessageRouterDeps) {
+    const lock = new LockMessageHandler(deps.conversationRecovery);
     const command = new CommandMessageHandler();
     const flow = new FlowMessageHandler();
     const discard = new DiscardMessageHandler();
-    command.setNext(flow).setNext(discard);
+    lock.setNext(command).setNext(flow).setNext(discard);
     discard.setNext(null);
-    this.head = command;
+    this.head = lock;
   }
 
   async route(message: RoutedMessage): Promise<void> {
