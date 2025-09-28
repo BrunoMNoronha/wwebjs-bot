@@ -162,6 +162,28 @@ Execute os testes:
 npm test
 ```
 
+## 📜 Scripts do `package.json`
+
+A tabela a seguir descreve cada script disponível para facilitar a automação do ciclo de desenvolvimento:
+
+| Script              | Comando                                   | Finalidade                                                                                                                                 |
+|---------------------|-------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------|
+| `build`             | `tsc -p tsconfig.json`                    | Compila os arquivos TypeScript para a pasta `dist/`, garantindo que o código esteja pronto para execução em produção.                     |
+| `prestart`          | `npm run build`                           | Executa a compilação automaticamente antes de `npm start`, evitando que a aplicação rode com artefatos desatualizados.                    |
+| `start`             | `node dist/main.js`                       | Inicia o bot em Node.js utilizando os artefatos compilados.                                                                               |
+| `lint`              | `eslint . --ext .ts,.js`                  | Aplica análise estática para reforçar boas práticas de código e prevenir problemas comuns.                                               |
+| `format`            | `prettier --write .`                      | Formata automaticamente o código-fonte mantendo a padronização do projeto.                                                                |
+| `test`              | `jest --runInBand`                        | Executa a suíte completa de testes unitários em série, útil para depuração local.                                                         |
+| `test:watch`        | `jest --watchAll`                         | Roda os testes em modo observador, ideal para feedback contínuo durante o desenvolvimento.                                                |
+| `test:answers`      | `jest --runInBand -t "(answers|opções|options)"` | Valida especificamente cenários relacionados a respostas de usuários nos fluxos conversacionais.                                          |
+| `validate:answers`  | `npm run test:answers`                    | Atalho para repetir a validação das respostas sem repetir o comando completo do Jest.                                                     |
+| `test:flows`        | `jest --runInBand -t "(flow|fluxo|flows|opções)"` | Foca na verificação da integridade dos fluxos conversacionais e suas opções de navegação.                                                 |
+| `validate:flows`    | `npm run test:flows`                      | Garante rapidamente que os fluxos continuam válidos após alterações.                                                                      |
+| `test:ci`           | `jest --runInBand --coverage`             | Executa os testes com coleta de cobertura, recomendável para pipelines de integração contínua.                                           |
+| `validate`          | `npm run lint && npm run validate:answers && npm run validate:flows` | Pipeline local de validação que encadeia lint e validações específicas antes de publicar alterações.                                      |
+
+> 💡 **Alternativas performáticas**: para acelerar a execução de testes extensos em ambientes com múltiplos núcleos, pode-se substituir `--runInBand` por execução paralela padrão do Jest (`jest` sem o parâmetro), desde que não haja dependência de estado compartilhado entre casos de teste.
+
 Execute com cobertura:
 ```bash
 npm run test:coverage
