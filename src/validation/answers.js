@@ -14,6 +14,22 @@ function normalizeText(s) {
  * Normaliza uma opção para o formato canônico.
  * Aceita alias de campos comuns: id|key|value e text|label|title, next|to|goto
  */
+/**
+ * @param {{
+ *   id?: string,
+ *   key?: string,
+ *   value?: string,
+ *   text?: string,
+ *   label?: string,
+ *   title?: string,
+ *   next?: string,
+ *   to?: string,
+ *   goto?: string,
+ *   aliases?: string[],
+ *   correct?: boolean
+ * }} opt
+ * @param {number} index
+ */
 function normalizeOption(opt, index) {
   const id = opt.id ?? opt.key ?? opt.value;
   const text = opt.text ?? opt.label ?? opt.title;
@@ -43,6 +59,10 @@ function normalizeOption(opt, index) {
  * - aliases não podem colidir com o próprio texto (case-insensitive)
  * - next é opcional, mas se presente deve ser string (validação de existência do nó é feita no fluxo)
  * - (opcional) pelo menos uma correta se requireAtLeastOneCorrect = true
+ */
+/**
+ * @param {unknown[]} options
+ * @param {{requireAtLeastOneCorrect?: boolean, uniqueText?: boolean}} [config]
  */
 function validateAnswerOptions(options, config = {}) {
   const {
@@ -134,6 +154,10 @@ function validateAnswerOptions(options, config = {}) {
  * - match por texto (normalizado)
  * - (opcional) índice (1-based) se allowIndex = true
  */
+/**
+ * @param {Array<ReturnType<typeof normalizeOption>>} options
+ * @param {{allowIndex?: boolean}} [cfg]
+ */
 function buildOptionMatcher(options, cfg = {}) {
   const {
     allowIndex = true
@@ -155,7 +179,9 @@ function buildOptionMatcher(options, cfg = {}) {
     });
 
     // índice (1-based)
-    byNorm.set(`i:${idx + 1}`, opt);
+    if (allowIndex) {
+      byNorm.set(`i:${idx + 1}`, opt);
+    }
   });
 
   function match(inputRaw) {
