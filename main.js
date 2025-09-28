@@ -5,6 +5,10 @@ const { flow: CatalogFlow } = require('./src/flows/catalog');
 const { flow: MenuFlow } = require('./src/flows/menu');
 const { createApp } = require('./src/app/appFactory');
 const { createCommandRegistry } = require('./src/app/commandRegistry');
+const {
+    createFlowPromptTracker,
+    DEFAULT_FLOW_PROMPT_WINDOW_MS,
+} = require('./src/app/flowPromptTracker');
 
 /** @typedef {import('whatsapp-web.js').Message} WWebMessage */
 /**
@@ -80,14 +84,16 @@ const app = createApp({
     buildHandlers: ({ client, rate, flowEngine }) => {
         // Estado por app
         let reconnectAttempts = 0;
-        const recentFlowContext = new Map(); // chatId -> { at, flow }
-        const FLOW_PROMPT_WINDOW_MS = Number(process.env.FLOW_PROMPT_WINDOW_MS || 2 * 60 * 1000);
+        const FLOW_PROMPT_WINDOW_MS = Number(
+            process.env.FLOW_PROMPT_WINDOW_MS || DEFAULT_FLOW_PROMPT_WINDOW_MS,
+        );
+        const flowPromptTracker = createFlowPromptTracker({ windowMs: FLOW_PROMPT_WINDOW_MS });
 
         /**
          * @param {string} chatId
          * @param {string} content
          * @returns {Promise<unknown>}
-         */
+        */
         const sendSafe = async (chatId, content) => rate.withSend(chatId, () => client.sendMessage(chatId, content));
 
         /**
@@ -96,10 +102,7 @@ const app = createApp({
          * @returns {void}
          */
         const rememberFlowPrompt = (chatId, flowKey) => {
-            const prev = recentFlowContext.get(chatId);
-            const key = flowKey ?? prev?.flow;
-            if (!key) return;
-            recentFlowContext.set(chatId, { at: Date.now(), flow: key });
+            flowPromptTracker.remember(chatId, flowKey);
         };
 
         /**
@@ -107,7 +110,7 @@ const app = createApp({
          * @returns {void}
          */
         const clearFlowPrompt = (chatId) => {
-            recentFlowContext.delete(chatId);
+            flowPromptTracker.clear(chatId);
         };
 
         /**
@@ -116,11 +119,13 @@ const app = createApp({
          */
         const formatFlowPrompt = (node) => {
             if (!node) return '';
-            const header = node.prompt || '';
+            const header = typeof node.prompt === 'string' ? node.prompt : '';
             const options = Array.isArray(node.options) && node.options.length > 0
                 ? node.options.map((o, i) => `${i + 1}. ${o.text}`).join('\n')
                 : '';
-            return options ? `${header}\n${options}` : header;
+            if (header && options) return `${header}\n${options}`;
+            if (options) return options;
+            return header;
         };
 
         /**
@@ -228,12 +233,10 @@ const app = createApp({
                     const active = await flowEngine.isActive(message.from);
                     if (!active) {
                         const looksLikeFlowInput = /^\d+$/.test(body);
-                        const entry = recentFlowContext.get(message.from);
-                        const lastPromptAt = entry?.at || 0;
-                        const promptIsRecent = !!entry?.flow && lastPromptAt && (Date.now() - lastPromptAt <= FLOW_PROMPT_WINDOW_MS);
-                        if (looksLikeFlowInput && promptIsRecent) {
+                        const previousFlow = flowPromptTracker.recentFlowKey(message.from);
+                        if (looksLikeFlowInput && previousFlow) {
                             await sendSafe(message.from, TEXT.flow?.expired || 'Sua sessão anterior foi encerrada.');
-                            const { def, key } = resolveFlowForRestart(entry?.flow);
+                            const { def, key } = resolveFlowForRestart(previousFlow);
                             const restart = await flowEngine.start(message.from, def);
                             if (restart.ok && restart.node) {
                                 await sendFlowPrompt(message.from, restart.node, key);
