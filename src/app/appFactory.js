@@ -6,13 +6,91 @@ const path = require('path');
 const { RateController } = require('../flow-runtime/rateController');
 const { FlowEngine } = require('../flow-runtime/engine');
 
+/**
+ * @typedef {Object} ClientEventHandlers
+ * @property {(message: import('whatsapp-web.js').Message) => Promise<void> | void} [handleIncoming]
+ * @property {(qr: string) => void} [onQR]
+ * @property {() => void} [onReady]
+ * @property {(message: string) => void} [onAuthFail]
+ * @property {(reason: string) => void | Promise<void>} [onDisconnected]
+ */
+
+/**
+ * @typedef {Object} HandlerFactoryContext
+ * @property {import('whatsapp-web.js').Client} client
+ * @property {import('../flow-runtime/rateController').RateController} rate
+ * @property {import('../flow-runtime/engine').FlowEngine} flowEngine
+ */
+
+/**
+ * @typedef {Object} AppFactoryOptions
+ * @property {string} [authDir]
+ * @property {(authDir: string) => import('whatsapp-web.js').Client} [clientFactory]
+ * @property {import('../flow-runtime/engine').FlowEngine} [flowEngine]
+ * @property {import('../flow-runtime/rateController').RateController} [rate]
+ * @property {(ctx: HandlerFactoryContext) => ClientEventHandlers} [buildHandlers]
+ */
+
+/**
+ * @typedef {Object} AppInstance
+ * @property {import('whatsapp-web.js').Client} client
+ * @property {import('../flow-runtime/rateController').RateController} rate
+ * @property {import('../flow-runtime/engine').FlowEngine} flowEngine
+ * @property {() => Promise<HandlerFactoryContext>} start
+ * @property {() => Promise<void>} stop
+ */
+
+/** @type {readonly string[]} */
+const BASE_PUPPETEER_ARGS = Object.freeze([
+  '--no-sandbox',
+  '--disable-setuid-sandbox',
+  '--disable-dev-shm-usage',
+  '--disable-gpu',
+  '--no-first-run',
+  '--no-zygote',
+  '--disable-extensions',
+]);
+
+/**
+ * @returns {import('whatsapp-web.js').ClientOptions['puppeteer']}
+ */
+function createPuppeteerOptions() {
+  /** @type {string[]} */
+  const args = [...BASE_PUPPETEER_ARGS];
+  if (process.env.PUPPETEER_SINGLE_PROCESS === '1') {
+    args.push('--single-process');
+  }
+
+  /** @type {import('whatsapp-web.js').ClientOptions['puppeteer']} */
+  const options = {
+    headless: true,
+    args,
+  };
+
+  const executablePath = process.env.CHROME_PATH;
+  if (typeof executablePath === 'string' && executablePath.trim()) {
+    options.executablePath = executablePath;
+  }
+
+  return options;
+}
+
+/**
+ * @param {string} authDir
+ * @returns {import('whatsapp-web.js').Client}
+ */
 function defaultClientFactory(authDir) {
   return new Client({
     authStrategy: new LocalAuth({ dataPath: authDir }),
-    puppeteer: { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] },
+    puppeteer: createPuppeteerOptions(),
   });
 }
 
+/**
+ * @param {import('whatsapp-web.js').Client} client
+ * @param {ClientEventHandlers} [handlers]
+ * @returns {void}
+ */
 function registerHandlers(client, { handleIncoming, onQR, onReady, onAuthFail, onDisconnected } = {}) {
   if (onQR) client.on('qr', onQR);
   if (onReady) client.on('ready', onReady);
@@ -24,6 +102,10 @@ function registerHandlers(client, { handleIncoming, onQR, onReady, onAuthFail, o
   }
 }
 
+/**
+ * @param {AppFactoryOptions} [options]
+ * @returns {AppInstance}
+ */
 function createApp({
   authDir = path.resolve(process.cwd(), '.wwebjs_auth'),
   clientFactory = defaultClientFactory,
@@ -38,7 +120,9 @@ function createApp({
   const client = clientFactory(authDir);
   rate.start();
 
+  /** @type {HandlerFactoryContext} */
   const ctx = { client, rate, flowEngine };
+  /** @type {ClientEventHandlers} */
   const handlers = typeof buildHandlers === 'function' ? (buildHandlers(ctx) || {}) : {};
 
   registerHandlers(client, {
@@ -49,6 +133,9 @@ function createApp({
     onDisconnected: handlers.onDisconnected,
   });
 
+  /**
+   * @returns {Promise<HandlerFactoryContext>}
+   */
   async function start() {
     if (process.env.NODE_ENV !== 'test') {
       await client.initialize();
@@ -56,6 +143,9 @@ function createApp({
     return ctx;
   }
 
+  /**
+   * @returns {Promise<void>}
+   */
   async function stop() {
     try { rate.stop(); } catch {}
     try { await client.destroy(); } catch {}
