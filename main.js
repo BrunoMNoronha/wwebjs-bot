@@ -39,7 +39,10 @@ function isOwnerMessage(msg) {
 }
 
 // Diretório de sessão alinhado com LocalAuth (usado também no cleanup)
-const AUTH_DIR = path.resolve(process.cwd(), '.wwebjs_auth');
+const AUTH_DIR = path.resolve(
+    process.cwd(),
+    process.env.WWEBJS_AUTH_DIR || '.wwebjs_auth'
+);
 
 /**
  * @param {number} ms
@@ -49,10 +52,17 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 /**
  * @param {string} dir
- * @param {{ retries?: number, baseDelay?: number }} [options]
+ * @param {{ retries?: number, baseDelay?: number, maxDelay?: number }} [options]
  * @returns {Promise<boolean>}
  */
-async function removeAuthDirWithRetry(dir = AUTH_DIR, { retries = 10, baseDelay = 200 } = {}) {
+async function removeAuthDirWithRetry(
+    dir = AUTH_DIR,
+    {
+        retries = Number(process.env.AUTH_RM_RETRIES || 10),
+        baseDelay = Number(process.env.AUTH_RM_BASE_DELAY_MS || 200),
+        maxDelay = Number(process.env.AUTH_RM_MAX_DELAY_MS || 2000),
+    } = {}
+) {
     for (let attempt = 1; attempt <= retries; attempt++) {
         try {
             await fs.rm(dir, { recursive: true, force: true });
@@ -64,7 +74,7 @@ async function removeAuthDirWithRetry(dir = AUTH_DIR, { retries = 10, baseDelay 
                 console.error(`[auth-dir] falha ao remover (${code}) após ${attempt} tentativas:`, err.message);
                 return false;
             }
-            const delay = Math.min(2000, Math.floor(baseDelay * Math.pow(1.7, attempt - 1)));
+            const delay = Math.min(maxDelay, Math.floor(baseDelay * Math.pow(1.7, attempt - 1)));
             await sleep(delay);
         }
     }
@@ -94,6 +104,7 @@ async function safeReauth(cli) {
 }
 // Cria app via factory com handlers que capturam estado por instância
 const app = createApp({
+    authDir: AUTH_DIR,
     buildHandlers: ({ client, rate, flowEngine }) => {
         // Estado por app
         let reconnectAttempts = 0;
@@ -196,6 +207,12 @@ const app = createApp({
             const restartNotice = 'Reiniciando o bot…';
             const flowUnavailableText = 'Fluxo indisponível no momento.';
 
+            const SHOULD_EXIT_ON_SHUTDOWN = (
+                process.env.EXIT_ON_SHUTDOWN != null
+                    ? process.env.EXIT_ON_SHUTDOWN === '1'
+                    : process.env.NODE_ENV !== 'test'
+            );
+
             const commandRegistry = createCommandRegistry({
                 sendSafe,
                 sendFlowPrompt,
@@ -209,7 +226,7 @@ const app = createApp({
                 flowUnavailableText,
                 shutdownNotice,
                 restartNotice,
-                shouldExitOnShutdown: process.env.NODE_ENV !== 'test',
+                shouldExitOnShutdown: SHOULD_EXIT_ON_SHUTDOWN,
             });
 
             /**
@@ -284,7 +301,10 @@ const app = createApp({
         const onDisconnected = async (reason) => {
             console.log('⚠️ Cliente foi desconectado', reason);
             if (String(reason).toUpperCase() === 'LOGOUT') { await safeReauth(client); return; }
-            const backoffMs = Math.min(30000, 1000 * Math.pow(2, reconnectAttempts++));
+            const MAX = Number(process.env.RECONNECT_MAX_BACKOFF_MS || 30000);
+            const BASE = Number(process.env.RECONNECT_BASE_BACKOFF_MS || 1000);
+            const FACTOR = Number(process.env.RECONNECT_BACKOFF_FACTOR || 2);
+            const backoffMs = Math.min(MAX, BASE * Math.pow(FACTOR, reconnectAttempts++));
             setTimeout(() => { client.initialize().catch(e => console.error('[reconnect] initialize falhou:', e?.message || e)); }, backoffMs);
         };
 

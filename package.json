@@ -1,7 +1,7 @@
 {
   "name": "wwebjs-bot",
   "version": "1.0.0",
-  "description": "",
+  "description": "bot para WhatsApp construído com whatsapp-web.js, conversas baseadas em fluxos (flows)",
   "main": "main.js",
   "scripts": {
     "start": "node .",
