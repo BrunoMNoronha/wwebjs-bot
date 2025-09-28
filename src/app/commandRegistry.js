@@ -72,18 +72,34 @@ function createCommandRegistry(deps) {
     aliases.forEach((alias) => registry.set(alias, handler));
   };
 
+  /** @type {boolean} */
+  let isShutdownInProgress = false;
+  /** @type {boolean} */
+  let isRestartInProgress = false;
+
   register(['!shutdown'], async (message, context) => {
     if (!context.isOwner) return false;
 
+    if (isShutdownInProgress) {
+      console.warn('[commandRegistry] Solicitação de desligamento ignorada: já existe uma execução em andamento.');
+      return true;
+    }
+
+    isShutdownInProgress = true;
+
     try {
       if (!context.fromSelf) {
-        await sendSafe(message.from, shutdownNotice);
+        try {
+          await sendSafe(message.from, shutdownNotice);
+        } catch (/** @type {unknown} */ error) {
+          const parsedError = error instanceof Error ? error : new Error(String(error));
+          console.warn('[commandRegistry] Falha ao enviar aviso de desligamento:', parsedError);
+        }
       }
-    } catch (/** @type {unknown} */ error) {
-      const parsedError = error instanceof Error ? error : new Error(String(error));
-      console.warn('[commandRegistry] Falha ao enviar aviso de desligamento:', parsedError);
-    } finally {
+
       await gracefulShutdown({ exit: shouldExitOnShutdown });
+    } finally {
+      isShutdownInProgress = false;
     }
 
     return true;
@@ -92,15 +108,26 @@ function createCommandRegistry(deps) {
   register(['!restart'], async (message, context) => {
     if (!context.isOwner) return false;
 
+    if (isRestartInProgress) {
+      console.warn('[commandRegistry] Solicitação de reinício ignorada: já existe uma execução em andamento.');
+      return true;
+    }
+
+    isRestartInProgress = true;
+
     try {
       if (!context.fromSelf) {
-        await sendSafe(message.from, restartNotice);
+        try {
+          await sendSafe(message.from, restartNotice);
+        } catch (/** @type {unknown} */ error) {
+          const parsedError = error instanceof Error ? error : new Error(String(error));
+          console.warn('[commandRegistry] Falha ao enviar aviso de reinício:', parsedError);
+        }
       }
-    } catch (/** @type {unknown} */ error) {
-      const parsedError = error instanceof Error ? error : new Error(String(error));
-      console.warn('[commandRegistry] Falha ao enviar aviso de reinício:', parsedError);
-    } finally {
+
       await gracefulRestart();
+    } finally {
+      isRestartInProgress = false;
     }
 
     return true;
