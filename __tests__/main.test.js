@@ -31,7 +31,19 @@ describe('Fluxos de menu (texto via FlowEngine)', () => {
     jest.resetModules();
     process.env.MENU_FLOW = '1';
     const { createApp } = require('../src/app/appFactory');
-    const { flow: MenuFlow } = require('../src/flows/menu');
+    const flows = require('../src/flows');
+    /**
+     * @template T
+     * @param {{ flow?: T } | T} entry
+     * @returns {T}
+     */
+    const resolveFlow = (entry) => {
+      if (entry && typeof entry === 'object' && 'flow' in entry && entry.flow) {
+        return /** @type {T} */ (entry.flow);
+      }
+      return /** @type {T} */ (entry);
+    };
+    const MenuFlow = resolveFlow(flows.menu);
 
     app = createApp({
       buildHandlers: ({ client, rate, flowEngine }) => {
