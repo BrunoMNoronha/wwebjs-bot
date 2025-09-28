@@ -101,12 +101,31 @@ function normalizeBooleanEnv(value: string | null | undefined): boolean | undefi
   return undefined;
 }
 
+function normalizeNumberEnv(value: string | undefined, fallback: number): number {
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+
+  const trimmedValue: string = value.trim();
+  if (trimmedValue === '') {
+    return fallback;
+  }
+
+  const parsedValue: number = Number(trimmedValue);
+  if (!Number.isFinite(parsedValue)) {
+    return fallback;
+  }
+
+  return parsedValue;
+}
+
 function createConfig(overrides: ApplicationContainerOverrides): ApplicationContainerConfig {
   const authDir = overrides.authDir ?? path.resolve(process.cwd(), process.env.WWEBJS_AUTH_DIR ?? '.wwebjs_auth');
   const ownerId = overrides.ownerId ?? process.env.OWNER_ID ?? '';
   const allowSelfAdmin = overrides.allowSelfAdmin ?? process.env.ALLOW_SELF_ADMIN === '1';
   const menuFlowEnabled = overrides.menuFlowEnabled ?? process.env.MENU_FLOW === '1';
-  const flowPromptWindowMs = overrides.flowPromptWindowMs ?? Number(process.env.FLOW_PROMPT_WINDOW_MS ?? DEFAULT_FLOW_PROMPT_WINDOW_MS);
+  const flowPromptWindowMs = overrides.flowPromptWindowMs
+    ?? normalizeNumberEnv(process.env.FLOW_PROMPT_WINDOW_MS, DEFAULT_FLOW_PROMPT_WINDOW_MS);
   const normalizedExitOnShutdown: boolean | undefined = normalizeBooleanEnv(process.env.EXIT_ON_SHUTDOWN);
   const shouldExitOnShutdown = overrides.shouldExitOnShutdown
     ?? (normalizedExitOnShutdown ?? (process.env.NODE_ENV !== 'test'));
@@ -118,19 +137,28 @@ function createConfig(overrides: ApplicationContainerOverrides): ApplicationCont
   const invalidOptionText = overrides.invalidOptionText ?? 'Não entendi. Por favor, escolha uma das opções listadas.';
   const genericFlowErrorText = overrides.genericFlowErrorText ?? 'Ocorreu um erro no fluxo. Encerrando.';
   const rateLimits: RateLimitsConfig = {
-    perChatCooldownMs: overrides.rateLimits?.perChatCooldownMs ?? Number(process.env.RATE_PER_CHAT_COOLDOWN_MS ?? 1200),
-    globalMaxPerInterval: overrides.rateLimits?.globalMaxPerInterval ?? Number(process.env.THROTTLE_GLOBAL_MAX ?? 12),
-    globalIntervalMs: overrides.rateLimits?.globalIntervalMs ?? Number(process.env.THROTTLE_GLOBAL_INTERVAL_MS ?? 1000),
+    perChatCooldownMs: overrides.rateLimits?.perChatCooldownMs
+      ?? normalizeNumberEnv(process.env.RATE_PER_CHAT_COOLDOWN_MS, 1200),
+    globalMaxPerInterval: overrides.rateLimits?.globalMaxPerInterval
+      ?? normalizeNumberEnv(process.env.THROTTLE_GLOBAL_MAX, 12),
+    globalIntervalMs: overrides.rateLimits?.globalIntervalMs
+      ?? normalizeNumberEnv(process.env.THROTTLE_GLOBAL_INTERVAL_MS, 1000),
   };
   const authRemoval: AuthRemovalConfig = {
-    retries: overrides.authRemoval?.retries ?? Number(process.env.AUTH_RM_RETRIES ?? 10),
-    baseDelay: overrides.authRemoval?.baseDelay ?? Number(process.env.AUTH_RM_BASE_DELAY_MS ?? 200),
-    maxDelay: overrides.authRemoval?.maxDelay ?? Number(process.env.AUTH_RM_MAX_DELAY_MS ?? 2000),
+    retries: overrides.authRemoval?.retries
+      ?? normalizeNumberEnv(process.env.AUTH_RM_RETRIES, 10),
+    baseDelay: overrides.authRemoval?.baseDelay
+      ?? normalizeNumberEnv(process.env.AUTH_RM_BASE_DELAY_MS, 200),
+    maxDelay: overrides.authRemoval?.maxDelay
+      ?? normalizeNumberEnv(process.env.AUTH_RM_MAX_DELAY_MS, 2000),
   };
   const reconnect: ReconnectConfig = {
-    maxBackoffMs: overrides.reconnect?.maxBackoffMs ?? Number(process.env.RECONNECT_MAX_BACKOFF_MS ?? 30000),
-    baseBackoffMs: overrides.reconnect?.baseBackoffMs ?? Number(process.env.RECONNECT_BASE_BACKOFF_MS ?? 1000),
-    factor: overrides.reconnect?.factor ?? Number(process.env.RECONNECT_BACKOFF_FACTOR ?? 2),
+    maxBackoffMs: overrides.reconnect?.maxBackoffMs
+      ?? normalizeNumberEnv(process.env.RECONNECT_MAX_BACKOFF_MS, 30000),
+    baseBackoffMs: overrides.reconnect?.baseBackoffMs
+      ?? normalizeNumberEnv(process.env.RECONNECT_BASE_BACKOFF_MS, 1000),
+    factor: overrides.reconnect?.factor
+      ?? normalizeNumberEnv(process.env.RECONNECT_BACKOFF_FACTOR, 2),
   };
   return {
     authDir,
