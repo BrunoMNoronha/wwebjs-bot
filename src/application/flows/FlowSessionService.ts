@@ -17,10 +17,11 @@ import { ConversationRecoveryService, type AttemptStatus } from '../messaging/Co
 
 export interface FlowOption extends RuntimeFlowOption {}
 
-export interface FlowNode extends RuntimeFlowNode {
-  readonly template?: MenuTemplate;
-  readonly lockOnComplete?: boolean;
-}
+type FlowPrompt =
+  | { readonly kind: 'text'; readonly promptContent: string }
+  | { readonly kind: 'list'; readonly promptContent: MenuTemplate };
+
+export type FlowNode = (RuntimeFlowNode & FlowPrompt & { readonly lockOnComplete?: boolean });
 
 export interface FlowDefinition extends RuntimeFlowDefinition {
   readonly nodes: Record<string, FlowNode>;
@@ -235,25 +236,33 @@ export class FlowSessionService {
     return undefined;
   }
 
-  private async sendTemplate(chatId: string, template: MenuTemplate, sendSafe: FlowSafeSender): Promise<void> {
-    const sections = template.sections.map((section) => ({
+  private formatPrompt(prompt: FlowPrompt): MessageContent {
+    if (prompt.kind === 'text') {
+      return prompt.promptContent;
+    }
+
+    const sections = prompt.promptContent.sections.map((section) => ({
       title: section.title,
       rows: section.rows.map((row) => ({ ...row })),
     }));
-    const list = new List(template.body, template.buttonText, sections, template.title);
-    await sendSafe(chatId, list as MessageContent);
+    const list = new List(
+      prompt.promptContent.body,
+      prompt.promptContent.buttonText,
+      sections,
+      prompt.promptContent.title,
+    );
+    return list as MessageContent;
   }
 
   async sendPrompt(chatId: string, node: FlowNode | undefined, flowKey: FlowKey, sendSafe: FlowSafeSender): Promise<void> {
     if (!node) {
       return;
     }
-    if (node.prompt) {
+    if (node.kind === 'list' && typeof node.prompt === 'string' && node.prompt.trim()) {
       await sendSafe(chatId, node.prompt);
     }
-    if (node.template) {
-      await this.sendTemplate(chatId, node.template, sendSafe);
-    }
+    const message = this.formatPrompt(node);
+    await sendSafe(chatId, message);
     this.rememberPrompt(chatId, flowKey);
   }
 
@@ -355,12 +364,14 @@ export class FlowSessionService {
 
   private async sendInitialMenu(chatId: string, sendSafe: FlowSafeSender): Promise<void> {
     await sendSafe(chatId, `${this.options.textConfig.welcomeHeader}\n${this.options.textConfig.welcomeBody}`);
-    await this.sendTemplate(chatId, this.options.initialMenuTemplate, sendSafe);
+    const message = this.formatPrompt({ kind: 'list', promptContent: this.options.initialMenuTemplate });
+    await sendSafe(chatId, message);
     this.rememberPrompt(chatId, 'menu');
   }
 
   private async sendFallbackMenu(chatId: string, sendSafe: FlowSafeSender): Promise<void> {
-    await this.sendTemplate(chatId, this.options.fallbackMenuTemplate, sendSafe);
+    const message = this.formatPrompt({ kind: 'list', promptContent: this.options.fallbackMenuTemplate });
+    await sendSafe(chatId, message);
     this.rememberPrompt(chatId, 'menu');
   }
 
@@ -402,12 +413,17 @@ export class FlowSessionService {
     }
     if (status.phase === 'fallback') {
       await context.sendSafe(context.chatId, this.options.textConfig.fallbackRetry);
-      await this.sendTemplate(context.chatId, this.options.fallbackMenuTemplate, context.sendSafe);
+      const message = this.formatPrompt({
+        kind: 'list',
+        promptContent: this.options.fallbackMenuTemplate,
+      });
+      await context.sendSafe(context.chatId, message);
       this.rememberPrompt(context.chatId, 'menu');
       return true;
     }
     await context.sendSafe(context.chatId, this.options.textConfig.friendlyRetry);
-    await this.sendTemplate(context.chatId, this.options.initialMenuTemplate, context.sendSafe);
+    const message = this.formatPrompt({ kind: 'list', promptContent: this.options.initialMenuTemplate });
+    await context.sendSafe(context.chatId, message);
     this.rememberPrompt(context.chatId, 'menu');
     return true;
   }
