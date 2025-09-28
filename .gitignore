@@ -5,8 +5,19 @@ yarn-debug.log
 yarn-error.log
 package-lock.json
 
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
 # Auth do whatsapp-web.js
 .wwebjs_auth/
+.wwebjs_cache/
+session.json
+qr-code.png
+qr.png
 
 # Testes e mocks
 coverage/
@@ -14,7 +25,29 @@ __mocks__/
 
 # Outros
 .env
+.env.local
+.env.production
 .DS_Store
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Arquivos do bot
+bot-state/
+chat-sessions/
+flow-states/
+media/
+downloads/
+temp/
+*.backup
+*.bak
+*.tmp
+
+# Logs específicos
+bot.log
+error.log
+debug.log
+whatsapp.log
 *.log
 # Logs
 logs
