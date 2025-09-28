@@ -4,6 +4,14 @@ const { TEXT } = require('./src/config/messages');
 const { flow: CatalogFlow } = require('./src/flows/catalog');
 const { flow: MenuFlow } = require('./src/flows/menu');
 const { createApp } = require('./src/app/appFactory');
+const { createCommandRegistry } = require('./src/app/commandRegistry');
+
+/** @typedef {import('whatsapp-web.js').Message} WWebMessage */
+/**
+ * @typedef {Object} FlowPromptNode
+ * @property {string} [prompt]
+ * @property {Array<{ text: string }>} [options]
+ */
 
 // Permissões de administrador
 const OWNER_ID = process.env.OWNER_ID || '';
@@ -16,8 +24,17 @@ function isOwnerMessage(msg) {
 // Diretório de sessão alinhado com LocalAuth (usado também no cleanup)
 const AUTH_DIR = path.resolve(process.cwd(), '.wwebjs_auth');
 
-function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+/**
+ * @param {number} ms
+ * @returns {Promise<void>}
+ */
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+/**
+ * @param {string} dir
+ * @param {{ retries?: number, baseDelay?: number }} [options]
+ * @returns {Promise<boolean>}
+ */
 async function removeAuthDirWithRetry(dir = AUTH_DIR, { retries = 10, baseDelay = 200 } = {}) {
     for (let attempt = 1; attempt <= retries; attempt++) {
         try {
@@ -37,6 +54,10 @@ async function removeAuthDirWithRetry(dir = AUTH_DIR, { retries = 10, baseDelay 
     return false;
 }
 
+/**
+ * @param {{ destroy: () => Promise<void>, initialize: () => Promise<void> }} cli
+ * @returns {Promise<void>}
+ */
 async function safeReauth(cli) {
     try {
         await cli.destroy();
@@ -62,8 +83,18 @@ const app = createApp({
         const recentFlowContext = new Map(); // chatId -> { at, flow }
         const FLOW_PROMPT_WINDOW_MS = Number(process.env.FLOW_PROMPT_WINDOW_MS || 2 * 60 * 1000);
 
+        /**
+         * @param {string} chatId
+         * @param {string} content
+         * @returns {Promise<unknown>}
+         */
         const sendSafe = async (chatId, content) => rate.withSend(chatId, () => client.sendMessage(chatId, content));
 
+        /**
+         * @param {string} chatId
+         * @param {string | undefined} flowKey
+         * @returns {void}
+         */
         const rememberFlowPrompt = (chatId, flowKey) => {
             const prev = recentFlowContext.get(chatId);
             const key = flowKey ?? prev?.flow;
@@ -71,10 +102,18 @@ const app = createApp({
             recentFlowContext.set(chatId, { at: Date.now(), flow: key });
         };
 
+        /**
+         * @param {string} chatId
+         * @returns {void}
+         */
         const clearFlowPrompt = (chatId) => {
             recentFlowContext.delete(chatId);
         };
 
+        /**
+         * @param {FlowPromptNode | undefined} node
+         * @returns {string}
+         */
         const formatFlowPrompt = (node) => {
             if (!node) return '';
             const header = node.prompt || '';
@@ -84,12 +123,22 @@ const app = createApp({
             return options ? `${header}\n${options}` : header;
         };
 
+        /**
+         * @param {string} chatId
+         * @param {FlowPromptNode | undefined} node
+         * @param {string} flowKey
+         * @returns {Promise<void>}
+         */
         const sendFlowPrompt = async (chatId, node, flowKey) => {
             const text = formatFlowPrompt(node);
             await sendSafe(chatId, text);
             rememberFlowPrompt(chatId, flowKey);
         };
 
+        /**
+         * @param {string | undefined} flowKey
+         * @returns {{ def: any, key: 'menu' | 'catalog' }}
+         */
         const resolveFlowForRestart = (flowKey) => {
             if (flowKey === 'menu') {
                 if (process.env.MENU_FLOW === '1') {
@@ -105,12 +154,19 @@ const app = createApp({
                 : { def: CatalogFlow, key: 'catalog' };
         };
 
+            /**
+             * @param {{ exit?: boolean }} [options]
+             * @returns {Promise<void>}
+             */
             async function gracefulShutdown({ exit = true } = {}) {
                 try { rate.stop(); } catch {}
                 try { await client.destroy(); } catch (e) { console.warn('[shutdown] destroy:', e?.message || e); }
                 if (exit && process.env.NODE_ENV !== 'test') process.exit(0);
             }
 
+            /**
+             * @returns {Promise<void>}
+             */
             async function gracefulRestart() {
                 try { rate.stop(); } catch {}
                 try { await client.destroy(); } catch {}
@@ -118,102 +174,96 @@ const app = createApp({
                 try { await client.initialize(); } catch (e) { console.error('[restart] initialize:', e?.message || e); }
             }
 
-                const handleIncoming = async (message) => {
-                    if (!message) return;
-            const raw = (typeof message.body === 'string') ? message.body : '';
-            console.log(raw);
-                    const body = raw.toLowerCase().trim();
-                    const fromJid = message.from || '';
-                    const toJid = message.to || '';
+            const shutdownNotice = 'Encerrando o bot com segurança…';
+            const restartNotice = 'Reiniciando o bot…';
+            const flowUnavailableText = 'Fluxo indisponível no momento.';
 
-                    // Ignorar mensagens de grupos e atualizações/status
-                    if (fromJid.endsWith('@g.us') || toJid.endsWith('@g.us')) return; // grupos
-                    if (fromJid === 'status@broadcast' || toJid === 'status@broadcast') return; // status updates
-                    if (message.isStatus || message.isBroadcast) return; // defensivo
-                    const fromSelf = !!message.fromMe;
-                    const isOwner = isOwnerMessage(message);
+            const commandRegistry = createCommandRegistry({
+                sendSafe,
+                sendFlowPrompt,
+                clearFlowPrompt,
+                flowEngine,
+                menuFlow: MenuFlow,
+                catalogFlow: CatalogFlow,
+                gracefulShutdown,
+                gracefulRestart,
+                welcomeText: TEXT.welcome,
+                flowUnavailableText,
+                shutdownNotice,
+                restartNotice,
+                shouldExitOnShutdown: process.env.NODE_ENV !== 'test',
+            });
 
-                    // Permitir apenas comandos admin quando a mensagem for sua (fromMe)
-                    if (fromSelf && !(ALLOW_SELF_ADMIN && isOwner)) return;
+            /**
+             * @param {WWebMessage} message
+             * @returns {Promise<void>}
+             */
+            const handleIncoming = async (message) => {
+                if (!message) return;
+                const raw = (typeof message.body === 'string') ? message.body : '';
+                console.log(raw);
+                const body = raw.toLowerCase().trim();
+                const fromJid = message.from || '';
+                const toJid = message.to || '';
 
-                    // Comandos administrativos
-                    if (isOwner && body === '!shutdown') {
-                        if (!fromSelf) await sendSafe(message.from, 'Encerrando o bot com segurança…');
-                        await gracefulShutdown({ exit: process.env.NODE_ENV !== 'test' });
-                        return;
-                    }
-                    if (isOwner && body === '!restart') {
-                        if (!fromSelf) await sendSafe(message.from, 'Reiniciando o bot…');
-                        await gracefulRestart();
-                        return;
-                    }
+                // Ignorar mensagens de grupos e atualizações/status
+                if (fromJid.endsWith('@g.us') || toJid.endsWith('@g.us')) return; // grupos
+                if (fromJid === 'status@broadcast' || toJid === 'status@broadcast') return; // status updates
+                if (message.isStatus || message.isBroadcast) return; // defensivo
+                const fromSelf = !!message.fromMe;
+                const isOwner = isOwnerMessage(message);
 
-                    // Ignora mensagens próprias que não são admin
-                    if (fromSelf) return;
+                // Permitir apenas comandos admin quando a mensagem for sua (fromMe)
+                if (fromSelf && !(ALLOW_SELF_ADMIN && isOwner)) return;
 
-            if (body === '!menu' || body === '!lista') {
-                if (process.env.MENU_FLOW === '1') {
-                    const start = await flowEngine.start(message.from, MenuFlow);
-                    if (!start.ok) {
-                        clearFlowPrompt(message.from);
-                        await sendSafe(message.from, 'Fluxo indisponível no momento.');
-                    } else {
-                        await sendFlowPrompt(message.from, start.node, 'menu');
-                    }
-                } else {
-                    clearFlowPrompt(message.from);
-                    await sendSafe(message.from, TEXT.welcome);
+                if (body.startsWith('!')) {
+                    const handled = await commandRegistry.run(body, message, { isOwner, fromSelf });
+                    if (handled) return;
                 }
-            } else if (body === '!fluxo') {
-                const start = await flowEngine.start(message.from, CatalogFlow);
-                if (!start.ok) {
-                    clearFlowPrompt(message.from);
-                    await sendSafe(message.from, 'Fluxo indisponível no momento.');
-                } else {
-                    await sendFlowPrompt(message.from, start.node, 'catalog');
-                }
-            }
 
-            if (body && !body.startsWith('!')) {
-                const active = await flowEngine.isActive(message.from);
-                if (!active) {
-                    const looksLikeFlowInput = /^\d+$/.test(body);
-                    const entry = recentFlowContext.get(message.from);
-                    const lastPromptAt = entry?.at || 0;
-                    const promptIsRecent = !!entry?.flow && lastPromptAt && (Date.now() - lastPromptAt <= FLOW_PROMPT_WINDOW_MS);
-                    if (looksLikeFlowInput && promptIsRecent) {
-                        await sendSafe(message.from, TEXT.flow?.expired || 'Sua sessão anterior foi encerrada.');
-                        const { def, key } = resolveFlowForRestart(entry?.flow);
-                        const restart = await flowEngine.start(message.from, def);
-                        if (restart.ok && restart.node) {
-                            await sendFlowPrompt(message.from, restart.node, key);
-                        } else {
-                            clearFlowPrompt(message.from);
-                            await sendSafe(message.from, 'Fluxo indisponível no momento.');
+                // Ignora mensagens próprias que não são admin
+                if (fromSelf) return;
+
+                if (body && !body.startsWith('!')) {
+                    const active = await flowEngine.isActive(message.from);
+                    if (!active) {
+                        const looksLikeFlowInput = /^\d+$/.test(body);
+                        const entry = recentFlowContext.get(message.from);
+                        const lastPromptAt = entry?.at || 0;
+                        const promptIsRecent = !!entry?.flow && lastPromptAt && (Date.now() - lastPromptAt <= FLOW_PROMPT_WINDOW_MS);
+                        if (looksLikeFlowInput && promptIsRecent) {
+                            await sendSafe(message.from, TEXT.flow?.expired || 'Sua sessão anterior foi encerrada.');
+                            const { def, key } = resolveFlowForRestart(entry?.flow);
+                            const restart = await flowEngine.start(message.from, def);
+                            if (restart.ok && restart.node) {
+                                await sendFlowPrompt(message.from, restart.node, key);
+                            } else {
+                                clearFlowPrompt(message.from);
+                                await sendSafe(message.from, flowUnavailableText);
+                            }
                         }
+                        return;
                     }
-                    return;
+                    const res = await flowEngine.advance(message.from, body);
+                    if (!res.ok && res.error === 'input_invalido') {
+                        await sendSafe(message.from, 'Não entendi. Por favor, escolha uma das opções listadas.');
+                        return;
+                    }
+                    if (!res.ok) {
+                        clearFlowPrompt(message.from);
+                        try { await flowEngine.cancel(message.from); } catch {}
+                        await sendSafe(message.from, 'Ocorreu um erro no fluxo. Encerrando.');
+                        return;
+                    }
+                    if (res.terminal) {
+                        if (res.prompt) await sendSafe(message.from, res.prompt);
+                        return;
+                    }
+                    const text = res.prompt + '\n' + (res.options || []).join('\n');
+                    await sendSafe(message.from, text);
+                    rememberFlowPrompt(message.from);
                 }
-                const res = await flowEngine.advance(message.from, body);
-                if (!res.ok && res.error === 'input_invalido') {
-                    await sendSafe(message.from, 'Não entendi. Por favor, escolha uma das opções listadas.');
-                    return;
-                }
-                if (!res.ok) {
-                    clearFlowPrompt(message.from);
-                    try { await flowEngine.cancel(message.from); } catch {}
-                    await sendSafe(message.from, 'Ocorreu um erro no fluxo. Encerrando.');
-                    return;
-                }
-                if (res.terminal) {
-                    if (res.prompt) await sendSafe(message.from, res.prompt);
-                    return;
-                }
-                const text = res.prompt + '\n' + (res.options || []).join('\n');
-                await sendSafe(message.from, text);
-                rememberFlowPrompt(message.from);
-            }
-        };
+            };
 
         const onDisconnected = async (reason) => {
             console.log('⚠️ Cliente foi desconectado', reason);
