@@ -1,5 +1,7 @@
 'use strict';
 
+const { createConsoleLikeLogger } = require('../infrastructure/logging/createConsoleLikeLogger');
+
 /**
  * @typedef {import('whatsapp-web.js').Message} WWebMessage
  */
@@ -66,7 +68,7 @@ function createCommandRegistry(deps) {
     shutdownNotice,
     restartNotice,
     shouldExitOnShutdown,
-    logger = console,
+    logger = createConsoleLikeLogger({ name: 'command-registry' }),
   } = deps;
 
   /** @type {Map<string, CommandHandler>} */

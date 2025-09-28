@@ -1,5 +1,7 @@
 "use strict";
 
+const { createConsoleLikeLogger } = require('../infrastructure/logging/createConsoleLikeLogger');
+
 /**
  * @typedef {import('../infrastructure/logging/createConsoleLikeLogger').ConsoleLikeLogger} ConsoleLikeLogger
  */
@@ -9,17 +11,34 @@
 
 class MemoryStore {
   constructor() {
+    /** @type {Map<string, any>} */
     this.map = new Map();
+    /** @type {Map<string, ReturnType<typeof setTimeout>>} */
     this.ttlMap = new Map(); // chatId -> timeoutId
+    /** @type {number} */
     this.ttlSec = Number(process.env.FLOW_TTL_SECONDS || 1800); // 30 min
   }
+
+  /**
+   * @param {string} chatId
+   * @returns {Promise<any | null>}
+   */
   async get(chatId) {
     return this.map.get(chatId) || null;
   }
+
+  /**
+   * @param {string} chatId
+   * @param {any} value
+   * @returns {Promise<void>}
+   */
   async set(chatId, value) {
     this.map.set(chatId, value);
     if (this.ttlSec > 0) {
-      clearTimeout(this.ttlMap.get(chatId));
+      const existingTimeout = this.ttlMap.get(chatId);
+      if (existingTimeout) {
+        clearTimeout(existingTimeout);
+      }
       const to = setTimeout(() => {
         this.map.delete(chatId);
         this.ttlMap.delete(chatId);
@@ -28,28 +47,69 @@ class MemoryStore {
       this.ttlMap.set(chatId, to);
     }
   }
+
+  /**
+   * @param {string} chatId
+   * @returns {Promise<void>}
+   */
   async clear(chatId) {
     this.map.delete(chatId);
-    clearTimeout(this.ttlMap.get(chatId));
+    const existingTimeout = this.ttlMap.get(chatId);
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+    }
     this.ttlMap.delete(chatId);
   }
+
+  /**
+   * @param {string} chatId
+   * @returns {Promise<boolean>}
+   */
   async has(chatId) {
     return this.map.has(chatId);
   }
 }
 
 class RedisStore {
+  /**
+   * @param {import('ioredis')} redisClient
+   */
   constructor(redisClient) {
+    /** @type {import('ioredis')} */
     this.redis = redisClient;
+    /** @type {number} */
     this.ttlSec = Number(process.env.FLOW_TTL_SECONDS || 1800);
+    /** @type {string} */
     this.prefix = process.env.FLOW_REDIS_PREFIX || 'wwebjs:flow:';
   }
-  key(chatId) { return this.prefix + chatId; }
+
+  /**
+   * @param {string} chatId
+   * @returns {string}
+   */
+  key(chatId) {
+    return this.prefix + chatId;
+  }
+
+  /**
+   * @param {string} chatId
+   * @returns {Promise<any | null>}
+   */
   async get(chatId) {
     const raw = await this.redis.get(this.key(chatId));
     if (!raw) return null;
-    try { return JSON.parse(raw); } catch { return null; }
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
   }
+
+  /**
+   * @param {string} chatId
+   * @param {any} value
+   * @returns {Promise<void>}
+   */
   async set(chatId, value) {
     const payload = JSON.stringify(value);
     if (this.ttlSec > 0) {
@@ -58,14 +118,28 @@ class RedisStore {
       await this.redis.set(this.key(chatId), payload);
     }
   }
-  async clear(chatId) { await this.redis.del(this.key(chatId)); }
-  async has(chatId) { return Boolean(await this.redis.exists(this.key(chatId))); }
+
+  /**
+   * @param {string} chatId
+   * @returns {Promise<void>}
+   */
+  async clear(chatId) {
+    await this.redis.del(this.key(chatId));
+  }
+
+  /**
+   * @param {string} chatId
+   * @returns {Promise<boolean>}
+   */
+  async has(chatId) {
+    return Boolean(await this.redis.exists(this.key(chatId)));
+  }
 }
 
 /**
- * @param {ConsoleLikeLogger} [logger=console]
+ * @param {ConsoleLikeLogger} [logger=createConsoleLikeLogger({ name: 'flow-store' })]
  */
-function createRedisClientFromEnv(logger = console) {
+function createRedisClientFromEnv(logger = createConsoleLikeLogger({ name: 'flow-store' })) {
   const isTest = process.env.NODE_ENV === 'test';
   const hasUrl = !!process.env.REDIS_URL;
   const hasHost = !!process.env.REDIS_HOST;
@@ -105,10 +179,10 @@ function createRedisClientFromEnv(logger = console) {
  *  3) Auto-detecção (Redis via env; caso contrário, memória)
  *
  * @param {{ driver?: 'memory' | 'redis', redisClient?: any }} [options]
- * @param {ConsoleLikeLogger} [logger=console]
+ * @param {ConsoleLikeLogger} [logger=createConsoleLikeLogger({ name: 'flow-store' })]
  * @returns {MemoryStore | RedisStore}
  */
-function createStore(options = {}, logger = console) {
+function createStore(options = {}, logger = createConsoleLikeLogger({ name: 'flow-store' })) {
   const pref = (options.driver || process.env.FLOW_STORE || '').toLowerCase().trim();
 
   if (pref === 'memory') {
