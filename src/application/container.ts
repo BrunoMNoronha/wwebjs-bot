@@ -5,12 +5,7 @@ import { FlowEngine } from '../flow-runtime/engine';
 import { RateController } from '../flow-runtime/rateController';
 import { MessageRouter } from './messaging/MessageRouter';
 import type { MessageRouterDeps } from './messaging/MessageRouter';
-import {
-  FlowSessionService,
-  type FlowDefinition,
-  type FlowKey,
-  type FlowModuleRegistry,
-} from './flows/FlowSessionService';
+import { FlowSessionService, type FlowDefinition, type FlowKey } from './flows/FlowSessionService';
 import flows from '../flows';
 import {
   TEXT,
@@ -155,7 +150,7 @@ export function createApplicationContainer(options: ApplicationContainerOptions 
   });
 
   const flowSessionService = new FlowSessionService({
-    flowModules: flows as FlowModuleRegistry,
+    flowModules: flows,
     overrides: options.flows,
     menuFlowEnabled: config.menuFlowEnabled,
     promptWindowMs: config.flowPromptWindowMs,

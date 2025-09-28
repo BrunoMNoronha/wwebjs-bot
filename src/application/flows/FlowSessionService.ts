@@ -32,9 +32,7 @@ export interface FlowModule<T> {
   readonly flow: T;
 }
 
-export interface FlowModuleRegistry {
-  readonly [key: string]: FlowModule<FlowDefinition> | FlowDefinition | undefined;
-}
+export type FlowModuleRegistry = Readonly<Record<FlowKey, FlowModule<FlowDefinition>>>;
 
 export interface FlowSessionServiceOptions {
   readonly flowModules: FlowModuleRegistry;
@@ -201,17 +199,20 @@ export class FlowSessionService {
   }
 
   private resolveFlowDefinition(key: FlowKey): FlowDefinition {
-    if (this.options.overrides?.[key]) {
-      return this.options.overrides[key] as FlowDefinition;
+    const override = this.options.overrides?.[key];
+    if (override) {
+      return override;
     }
     const moduleEntry = this.options.flowModules[key];
     if (!moduleEntry) {
-      throw new Error(`Fluxo desconhecido: ${key}`);
+      const availableKeys = Object.keys(this.options.flowModules);
+      const availableList = availableKeys.length > 0 ? availableKeys.join(', ') : 'nenhum';
+      throw new Error(`Fluxo desconhecido: ${key}. Disponíveis: ${availableList}`);
     }
-    if (typeof moduleEntry === 'object' && 'flow' in moduleEntry && moduleEntry.flow) {
-      return moduleEntry.flow as FlowDefinition;
+    if (!moduleEntry.flow) {
+      throw new Error(`Módulo de fluxo sem definição: ${key}`);
     }
-    return moduleEntry as FlowDefinition;
+    return moduleEntry.flow;
   }
 
   getFlowDefinition(key: FlowKey): FlowDefinition {
