@@ -111,7 +111,7 @@ class FastFuzzySuggestionEngine implements SuggestionEngine {
 
   constructor(candidates: readonly SuggestionCandidate[]) {
     const options: FastFuzzyOptions = {
-      keySelector: (candidate) => candidate.normalizedText,
+      keySelector: (candidate: SuggestionCandidate) => candidate.normalizedText,
       ignoreCase: false,
       ignoreSymbols: false,
       normalizeWhitespace: true,
